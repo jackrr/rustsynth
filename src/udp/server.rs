@@ -1,23 +1,26 @@
 use crossbeam_channel::Sender;
-use tokio::net::UdpSocket;
+use std::net::UdpSocket;
 
 use crate::state::messages::NoteCommand;
 use crate::udp::parser::parse_command;
 
-pub async fn run_udp_server(tx: Sender<NoteCommand>, sample_rate: f32) {
-    let socket = UdpSocket::bind("0.0.0.0:49161")
-        .await
-        .expect("Failed to bind UDP socket on port 49161");
+pub fn run_udp_server(tx: Sender<NoteCommand>, sample_rate: f32) {
+    let socket = match UdpSocket::bind("0.0.0.0:49161") {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("UDP: failed to bind port 49161: {}", e);
+            return;
+        }
+    };
 
     eprintln!("UDP server listening on port 49161");
 
     let mut buf = [0u8; 256];
     loop {
-        match socket.recv_from(&mut buf).await {
+        match socket.recv_from(&mut buf) {
             Ok((len, _addr)) => {
                 let data = &buf[..len];
                 if let Ok(s) = std::str::from_utf8(data) {
-                    // Split on semicolons to support multiple commands per packet
                     for cmd_str in s.split(';') {
                         let trimmed = cmd_str.trim();
                         if trimmed.is_empty() {
@@ -26,11 +29,11 @@ pub async fn run_udp_server(tx: Sender<NoteCommand>, sample_rate: f32) {
                         match parse_command(trimmed, sample_rate) {
                             Some(cmd) => {
                                 if tx.try_send(cmd).is_err() {
-                                    eprintln!("Note command queue full, dropping command");
+                                    eprintln!("UDP: note command queue full, dropping");
                                 }
                             }
                             None => {
-                                eprintln!("Failed to parse command: {:?}", trimmed);
+                                eprintln!("UDP: unrecognized command: {:?}", trimmed);
                             }
                         }
                     }

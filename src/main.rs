@@ -29,6 +29,13 @@ fn main() -> anyhow::Result<()> {
     let state_for_tui = synth_state.clone();
     let state_for_audio = synth_state.clone();
 
+    // Start UDP server (blocking, in its own thread — no tokio needed)
+    let note_tx_for_udp = note_tx.clone();
+    std::thread::Builder::new()
+        .name("udp-server".into())
+        .spawn(move || run_udp_server(note_tx_for_udp, 48000.0))
+        .expect("Failed to spawn UDP server thread");
+
     // Set up CPAL audio
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
@@ -36,64 +43,31 @@ fn main() -> anyhow::Result<()> {
     let device = host.default_output_device()
         .expect("No output audio device found");
 
-    let config = device.default_output_config()
+    let supported_config = device.default_output_config()
         .expect("Could not get default output config");
 
-    let sample_rate = config.sample_rate().0 as f32;
-    eprintln!("Audio: {} Hz, {:?}", sample_rate, config.sample_format());
+    let sample_rate = supported_config.sample_rate().0 as f32;
+
+    // Force F32 output regardless of device default — avoids conversion bugs
+    // and the panic on unsupported formats (I32, U32, etc.)
+    let stream_config = cpal::StreamConfig {
+        channels: supported_config.channels(),
+        sample_rate: supported_config.sample_rate(),
+        buffer_size: cpal::BufferSize::Default,
+    };
 
     let mut engine = AudioEngine::new(sample_rate, note_rx, config_rx, state_for_audio);
 
-    let stream = match config.sample_format() {
-        cpal::SampleFormat::F32 => {
-            device.build_output_stream(
-                &config.into(),
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    engine.process_block(data);
-                },
-                |err| eprintln!("Audio error: {}", err),
-                None,
-            )?
-        }
-        cpal::SampleFormat::I16 => {
-            device.build_output_stream(
-                &config.into(),
-                move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                    let mut buf: Vec<f32> = vec![0.0; data.len()];
-                    engine.process_block(&mut buf);
-                    for (d, s) in data.iter_mut().zip(buf.iter()) {
-                        *d = cpal::Sample::from_sample(*s);
-                    }
-                },
-                |err| eprintln!("Audio error: {}", err),
-                None,
-            )?
-        }
-        cpal::SampleFormat::U16 => {
-            device.build_output_stream(
-                &config.into(),
-                move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                    let mut buf: Vec<f32> = vec![0.0; data.len()];
-                    engine.process_block(&mut buf);
-                    for (d, s) in data.iter_mut().zip(buf.iter()) {
-                        *d = cpal::Sample::from_sample(*s);
-                    }
-                },
-                |err| eprintln!("Audio error: {}", err),
-                None,
-            )?
-        }
-        fmt => panic!("Unsupported sample format: {:?}", fmt),
-    };
+    let stream = device.build_output_stream(
+        &stream_config,
+        move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            engine.process_block(data);
+        },
+        |err| eprintln!("Audio stream error: {}", err),
+        None,
+    )?;
 
     stream.play()?;
-
-    // Start UDP server in a tokio runtime (background thread)
-    let note_tx_for_udp = note_tx.clone();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-        rt.block_on(run_udp_server(note_tx_for_udp, sample_rate));
-    });
 
     // Set up TUI
     enable_raw_mode()?;
@@ -105,7 +79,7 @@ fn main() -> anyhow::Result<()> {
     let mut app = App::new(state_for_tui, config_tx);
     let result = app.run(&mut terminal);
 
-    // Cleanup
+    // Cleanup terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;

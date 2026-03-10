@@ -7,7 +7,7 @@ use crate::audio::routing::RoutingMatrix;
 use crate::audio::voice::Voice;
 use crate::state::messages::{ConfigCommand, NoteCommand};
 use crate::state::synth_state::{
-    EffectParamState, EffectState, GroupState, SynthState, VoiceState,
+    EffectParamState, EffectState, EnvelopeParams, GroupState, SynthState, VoiceState,
 };
 
 pub struct AudioEngine {
@@ -98,12 +98,21 @@ impl AudioEngine {
     }
 
     fn publish_state_snapshot(&self) {
-        let voices: [VoiceState; 16] = std::array::from_fn(|i| VoiceState {
-            active: self.voices[i].active,
-            midi_note: self.voices[i].midi_note,
-            velocity: self.voices[i].velocity,
-            amplitude: self.voices[i].amplitude(),
-            osc_type: self.voices[i].oscillator.osc_type,
+        let voices: [VoiceState; 16] = std::array::from_fn(|i| {
+            let env = &self.voices[i].envelope;
+            VoiceState {
+                active: self.voices[i].active,
+                midi_note: self.voices[i].midi_note,
+                velocity: self.voices[i].velocity,
+                amplitude: self.voices[i].amplitude(),
+                osc_type: self.voices[i].oscillator.osc_type,
+                envelope: EnvelopeParams {
+                    attack: env.attack_time,
+                    decay: env.decay_time,
+                    sustain: env.sustain_level,
+                    release: env.release_time,
+                },
+            }
         });
 
         let groups: [GroupState; 4] = std::array::from_fn(|i| {

@@ -1,13 +1,29 @@
 use crate::state::messages::OscillatorType;
 
+/// ADSR envelope parameters (carried in state snapshot so TUI can display/edit them)
+#[derive(Debug, Clone)]
+pub struct EnvelopeParams {
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+}
+
+impl Default for EnvelopeParams {
+    fn default() -> Self {
+        EnvelopeParams { attack: 0.01, decay: 0.2, sustain: 0.7, release: 0.3 }
+    }
+}
+
 /// Read-only snapshot of audio engine state, published to TUI
 #[derive(Debug, Clone)]
 pub struct VoiceState {
     pub active: bool,
     pub midi_note: u8,
     pub velocity: f32,
-    pub amplitude: f32,        // Current envelope level
+    pub amplitude: f32,
     pub osc_type: OscillatorType,
+    pub envelope: EnvelopeParams,
 }
 
 #[derive(Debug, Clone)]
@@ -34,7 +50,7 @@ pub struct GroupState {
 pub struct SynthState {
     pub voices: [VoiceState; 16],
     pub groups: [GroupState; 4],
-    pub routing: [[f32; 4]; 16],  // [voice][group] send levels
+    pub routing: [[f32; 4]; 16],
     pub sample_rate: f32,
 }
 
@@ -46,16 +62,14 @@ impl Default for VoiceState {
             velocity: 0.0,
             amplitude: 0.0,
             osc_type: OscillatorType::Sine,
+            envelope: EnvelopeParams::default(),
         }
     }
 }
 
 impl Default for GroupState {
     fn default() -> Self {
-        GroupState {
-            enabled: true,
-            effects: Vec::new(),
-        }
+        GroupState { enabled: true, effects: Vec::new() }
     }
 }
 
