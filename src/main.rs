@@ -3,7 +3,7 @@ mod state;
 mod udp;
 mod ui;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::io;
 
 use arc_swap::ArcSwap;
@@ -16,27 +16,29 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use audio::engine::AudioEngine;
 use state::{messages::{ConfigCommand, NoteCommand}, synth_state::SynthState};
-use udp::server::run_udp_server;
+use udp::server::{UdpStatus, run_udp_server};
 use ui::app::App;
 
 fn main() -> anyhow::Result<()> {
-    // Create channels
     let (note_tx, note_rx) = bounded::<NoteCommand>(256);
     let (config_tx, config_rx) = bounded::<ConfigCommand>(256);
 
-    // Shared state (Audio → TUI)
     let synth_state = Arc::new(ArcSwap::new(Arc::new(SynthState::default())));
     let state_for_tui = synth_state.clone();
     let state_for_audio = synth_state.clone();
 
-    // Start UDP server (blocking, in its own thread — no tokio needed)
+    // Start UDP server; surface bind result via shared status for TUI display
+    let udp_status = Arc::new(Mutex::new(UdpStatus::Starting));
+    let udp_status_for_thread = udp_status.clone();
+    let udp_status_for_app = udp_status.clone();
+
     let note_tx_for_udp = note_tx.clone();
     std::thread::Builder::new()
         .name("udp-server".into())
-        .spawn(move || run_udp_server(note_tx_for_udp, 48000.0))
+        .spawn(move || run_udp_server(note_tx_for_udp, 48000.0, udp_status_for_thread))
         .expect("Failed to spawn UDP server thread");
 
-    // Set up CPAL audio
+    // Set up CPAL audio (F32 stream regardless of device default)
     use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
     let host = cpal::default_host();
@@ -48,8 +50,6 @@ fn main() -> anyhow::Result<()> {
 
     let sample_rate = supported_config.sample_rate().0 as f32;
 
-    // Force F32 output regardless of device default — avoids conversion bugs
-    // and the panic on unsupported formats (I32, U32, etc.)
     let stream_config = cpal::StreamConfig {
         channels: supported_config.channels(),
         sample_rate: supported_config.sample_rate(),
@@ -69,17 +69,16 @@ fn main() -> anyhow::Result<()> {
 
     stream.play()?;
 
-    // Set up TUI
+    // TUI
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(state_for_tui, config_tx);
+    let mut app = App::new(state_for_tui, config_tx, udp_status_for_app);
     let result = app.run(&mut terminal);
 
-    // Cleanup terminal
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;

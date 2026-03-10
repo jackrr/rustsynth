@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
@@ -12,8 +12,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
-use crate::state::messages::{ConfigCommand, EffectType};
+use crate::state::messages::ConfigCommand;
 use crate::state::synth_state::SynthState;
+use crate::udp::server::UdpStatus;
 use crate::ui::mode::UIMode;
 use crate::ui::widgets::{
     fx_group_panel::FxGroupPanel,
@@ -28,11 +29,16 @@ pub struct App {
     routing_panel: RoutingPanel,
     state: Arc<ArcSwap<SynthState>>,
     config_tx: Sender<ConfigCommand>,
+    udp_status: Arc<Mutex<UdpStatus>>,
     running: bool,
 }
 
 impl App {
-    pub fn new(state: Arc<ArcSwap<SynthState>>, config_tx: Sender<ConfigCommand>) -> Self {
+    pub fn new(
+        state: Arc<ArcSwap<SynthState>>,
+        config_tx: Sender<ConfigCommand>,
+        udp_status: Arc<Mutex<UdpStatus>>,
+    ) -> Self {
         App {
             mode: UIMode::Voices,
             voice_panel: VoicePanel::new(),
@@ -40,12 +46,13 @@ impl App {
             routing_panel: RoutingPanel::new(),
             state,
             config_tx,
+            udp_status,
             running: true,
         }
     }
 
     pub fn run<B: ratatui::backend::Backend>(&mut self, terminal: &mut Terminal<B>) -> anyhow::Result<()> {
-        let frame_duration = Duration::from_millis(16); // ~60 FPS
+        let frame_duration = Duration::from_millis(16);
 
         while self.running {
             let frame_start = Instant::now();
@@ -55,7 +62,6 @@ impl App {
 
             let elapsed = frame_start.elapsed();
             let remaining = frame_duration.saturating_sub(elapsed);
-
             if event::poll(remaining)? {
                 if let Event::Key(key) = event::read()? {
                     self.handle_key(key, &state);
@@ -89,7 +95,7 @@ impl App {
     fn render_header(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(20), Constraint::Min(0), Constraint::Length(15)])
+            .constraints([Constraint::Length(20), Constraint::Min(0), Constraint::Length(22)])
             .split(area);
 
         let title = Paragraph::new("PILOT Rust Synth")
@@ -106,37 +112,58 @@ impl App {
             };
             Line::from(Span::styled(m.tab_label(), style))
         }).collect();
-
         let tabs = Tabs::new(tab_titles)
             .block(Block::default().borders(Borders::ALL))
             .divider("|");
         frame.render_widget(tabs, chunks[1]);
 
-        let udp = Paragraph::new("UDP:49161")
-            .style(Style::default().fg(Color::Green))
+        // UDP status widget
+        let (udp_text, udp_style) = match &*self.udp_status.lock().unwrap() {
+            UdpStatus::Starting => (
+                "UDP: starting…".to_string(),
+                Style::default().fg(Color::Yellow),
+            ),
+            UdpStatus::Bound { addr } => (
+                format!("UDP: {}", addr),
+                Style::default().fg(Color::Green),
+            ),
+            UdpStatus::Failed { reason } => (
+                format!("UDP ERR: {}", reason),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+        };
+        let udp = Paragraph::new(udp_text)
+            .style(udp_style)
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(udp, chunks[2]);
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
-        let help = match self.mode {
-            UIMode::Voices   => self.voice_panel.help_text(),
-            UIMode::FxGroups => "↑↓:Select effect  ←→:Adjust param  a:Add  d:Delete  e:Toggle  Tab:Mode  q:Quit",
-            UIMode::Routing  => "↑↓:Voice  []:Group  ←→:Adjust level  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  q:Quit",
+        let help = if self.mode == UIMode::FxGroups && self.fx_panel.show_picker {
+            "↑↓:Select effect  Enter:Add  Esc:Cancel"
+        } else {
+            match self.mode {
+                UIMode::Voices   => self.voice_panel.help_text(),
+                UIMode::FxGroups => "↑↓:Select effect  ←→:Adjust param  a:Add  d:Delete  e:Toggle  Tab:Mode  q:Quit",
+                UIMode::Routing  => "↑↓:Voice  []:Group  ←→:Adjust  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  q:Quit",
+            }
         };
         let p = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(p, area);
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
-        // q always quits (unless in a text entry field, which we don't have)
+        // Picker intercepts all keys when open
+        if self.mode == UIMode::FxGroups && self.fx_panel.show_picker {
+            self.handle_picker_key(key, state);
+            return;
+        }
+
         if key.code == KeyCode::Char('q') {
             self.running = false;
             return;
         }
 
-        // Tab switches mode, except when the voice panel is in an edit sub-section
-        // (where Tab cycles between Oscillator/Envelope/Sends sub-sections).
         let voices_in_grid = self.mode == UIMode::Voices
             && self.voice_panel.edit_section == VoiceEditSection::Grid;
         let tab_switches_mode = self.mode != UIMode::Voices || voices_in_grid;
@@ -161,6 +188,35 @@ impl App {
             UIMode::Voices   => self.handle_voices_key(key, state),
             UIMode::FxGroups => self.handle_fx_key(key, state),
             UIMode::Routing  => self.handle_routing_key(key, state),
+        }
+    }
+
+    fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
+        let panel = &mut self.fx_panel;
+        match key.code {
+            KeyCode::Up => {
+                panel.picker_selection = panel.picker_selection.saturating_sub(1);
+            }
+            KeyCode::Down => {
+                panel.picker_selection = (panel.picker_selection + 1).min(14); // 15 effects
+            }
+            KeyCode::Enter => {
+                let effect_type = panel.picker_selected_effect();
+                let position = state.groups[panel.selected_group].effects.len();
+                let _ = self.config_tx.try_send(ConfigCommand::AddEffect {
+                    group: panel.selected_group,
+                    effect_type,
+                    position,
+                });
+                // Move selection to the newly added effect
+                panel.selected_effect = position;
+                panel.selected_param = 0;
+                panel.show_picker = false;
+            }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                panel.show_picker = false;
+            }
+            _ => {}
         }
     }
 
@@ -190,8 +246,17 @@ impl App {
                     panel.selected_effect = 0;
                 }
             }
-            KeyCode::Left  => { if panel.selected_param > 0 { panel.selected_param -= 1; } }
-            KeyCode::Right => { panel.selected_param += 1; }
+            KeyCode::Left => {
+                if panel.selected_param > 0 { panel.selected_param -= 1; }
+            }
+            KeyCode::Right => {
+                let param_count = state.groups[panel.selected_group]
+                    .effects.get(panel.selected_effect)
+                    .map(|e| e.params.len()).unwrap_or(0);
+                if panel.selected_param + 1 < param_count {
+                    panel.selected_param += 1;
+                }
+            }
             KeyCode::Char('e') => {
                 let enabled = !state.groups[panel.selected_group].enabled;
                 let _ = self.config_tx.try_send(ConfigCommand::EnableGroup {
@@ -199,12 +264,8 @@ impl App {
                 });
             }
             KeyCode::Char('a') => {
-                // Add reverb as default; a real picker could be added later
-                let _ = self.config_tx.try_send(ConfigCommand::AddEffect {
-                    group: panel.selected_group,
-                    effect_type: EffectType::Reverb,
-                    position: state.groups[panel.selected_group].effects.len(),
-                });
+                panel.show_picker = true;
+                panel.picker_selection = 0;
             }
             KeyCode::Char('d') => {
                 if !state.groups[panel.selected_group].effects.is_empty() {
@@ -213,6 +274,7 @@ impl App {
                         position: panel.selected_effect,
                     });
                     panel.selected_effect = panel.selected_effect.saturating_sub(1);
+                    panel.selected_param = 0;
                 }
             }
             KeyCode::Char('+') | KeyCode::Char('=') => self.adjust_fx_param(state,  0.05),
@@ -241,15 +303,12 @@ impl App {
     fn handle_routing_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
         let panel = &mut self.routing_panel;
         match key.code {
-            // ↑↓ navigate voices
             KeyCode::Up   => { panel.selected_voice = panel.selected_voice.saturating_sub(1); }
             KeyCode::Down => { panel.selected_voice = (panel.selected_voice + 1).min(15); }
 
-            // [ / ] cycle groups (Tab is reserved for mode switching)
             KeyCode::Char(']') => { panel.selected_group = (panel.selected_group + 1) % 4; }
             KeyCode::Char('[') => { panel.selected_group = panel.selected_group.checked_sub(1).unwrap_or(3); }
 
-            // ← → directly adjust the selected cell's send level
             KeyCode::Left => {
                 let cur = state.routing[panel.selected_voice][panel.selected_group];
                 let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
@@ -266,8 +325,6 @@ impl App {
                     level: (cur + 0.05).clamp(0.0, 1.0),
                 });
             }
-
-            // Enter toggles 0 / 100%
             KeyCode::Enter => {
                 let cur = state.routing[panel.selected_voice][panel.selected_group];
                 let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
@@ -276,7 +333,6 @@ impl App {
                     level: if cur > 0.01 { 0.0 } else { 1.0 },
                 });
             }
-
             KeyCode::Char('c') => { panel.clipboard = Some(state.routing[panel.selected_voice]); }
             KeyCode::Char('p') => {
                 if let Some(cb) = panel.clipboard {
