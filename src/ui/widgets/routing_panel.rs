@@ -80,7 +80,7 @@ impl RoutingPanel {
         )
         .header(header)
         .block(Block::default()
-            .title("Send Matrix  (↑↓:voice  Tab:group  ←→:adjust  Enter:toggle 0/100%)")
+            .title("Send Matrix  (↑↓:voice  []:group  ←→:adjust  Enter:toggle 0/100%)")
             .borders(Borders::ALL));
 
         frame.render_widget(table, area);

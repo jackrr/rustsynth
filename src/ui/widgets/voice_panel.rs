@@ -7,7 +7,7 @@ use ratatui::{
 };
 
 use crate::state::messages::{ConfigCommand, OscillatorType};
-use crate::state::synth_state::SynthState;
+use crate::state::synth_state::{EnvelopeParams, SynthState};
 
 /// Which sub-section of the voice detail is focused for editing
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -18,11 +18,20 @@ pub enum VoiceEditSection {
     Sends,       // editing send levels (selected_send selects group A-D)
 }
 
+/// Snapshot of a voice's configuration, used for copy/paste
+#[derive(Debug, Clone)]
+pub struct VoiceClipboard {
+    pub osc_type: OscillatorType,
+    pub envelope: EnvelopeParams,
+    pub sends: [f32; 4],
+}
+
 pub struct VoicePanel {
     pub selected_voice: usize,
     pub edit_section: VoiceEditSection,
     pub selected_env_param: usize,  // 0=Attack 1=Decay 2=Sustain 3=Release
     pub selected_send: usize,       // 0-3 = group A-D
+    pub clipboard: Option<VoiceClipboard>,
 }
 
 impl VoicePanel {
@@ -32,6 +41,7 @@ impl VoicePanel {
             edit_section: VoiceEditSection::Grid,
             selected_env_param: 0,
             selected_send: 0,
+            clipboard: None,
         }
     }
 
@@ -69,7 +79,9 @@ impl VoicePanel {
     }
 
     fn render_voice_grid(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
-        let block = Block::default().title("Voices  (↑↓←→: navigate, Enter: edit)").borders(Borders::ALL);
+        let clip_hint = if self.clipboard.is_some() { "  [clipboard ready — p:paste]" } else { "" };
+        let title = format!("Voices  (↑↓←→:navigate  Enter:edit  c:copy  p:paste{})", clip_hint);
+        let block = Block::default().title(title).borders(Borders::ALL);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -103,8 +115,13 @@ impl VoicePanel {
                     let note_name = midi_note_name(voice.midi_note);
                     let amp_bar = amplitude_bar(voice.amplitude, 8);
 
+                    let is_copied = self.clipboard.is_some() && voice_idx == self.selected_voice
+                        && self.edit_section == VoiceEditSection::Grid;
+
                     let border_style = if is_selected {
                         Style::default().fg(Color::Yellow)
+                    } else if is_copied {
+                        Style::default().fg(Color::Magenta)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     };
@@ -243,7 +260,7 @@ impl VoicePanel {
     pub fn help_text(&self) -> &str {
         match self.edit_section {
             VoiceEditSection::Grid =>
-                "↑↓←→:Navigate  Enter:Edit section  o:Cycle osc  Tab:Mode  q:Quit",
+                "↑↓←→:Navigate  Enter:Edit  o:Cycle osc  c:Copy voice  p:Paste voice  Tab:Mode  q:Quit",
             VoiceEditSection::Oscillator =>
                 "←→:Cycle osc type  Tab:Next section  Esc:Back to grid  q:Quit",
             VoiceEditSection::Envelope =>
@@ -253,55 +270,85 @@ impl VoicePanel {
         }
     }
 
-    /// Handle a key event; returns a ConfigCommand if the audio engine should be notified
-    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) -> Option<ConfigCommand> {
+    /// Handle a key event; returns commands to send to the audio engine.
+    /// Returns Vec because paste emits multiple commands at once.
+    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) -> Vec<ConfigCommand> {
         use crossterm::event::KeyCode;
 
         match self.edit_section {
             VoiceEditSection::Grid => match key.code {
-                KeyCode::Up    => { self.move_grid(-1,  0); None }
-                KeyCode::Down  => { self.move_grid( 1,  0); None }
-                KeyCode::Left  => { self.move_grid( 0, -1); None }
-                KeyCode::Right => { self.move_grid( 0,  1); None }
-                KeyCode::Enter => {
-                    self.edit_section = VoiceEditSection::Oscillator;
-                    None
-                }
-                KeyCode::Char('o') => {
-                    // Quick oscillator cycle without entering edit mode
-                    self.cycle_osc(state, 1)
-                }
-                _ => None,
+                KeyCode::Up    => { self.move_grid(-1,  0); vec![] }
+                KeyCode::Down  => { self.move_grid( 1,  0); vec![] }
+                KeyCode::Left  => { self.move_grid( 0, -1); vec![] }
+                KeyCode::Right => { self.move_grid( 0,  1); vec![] }
+                KeyCode::Enter => { self.edit_section = VoiceEditSection::Oscillator; vec![] }
+                KeyCode::Char('o') => self.cycle_osc(state, 1).into_iter().collect(),
+                KeyCode::Char('c') => { self.copy_voice(state); vec![] }
+                KeyCode::Char('p') => self.paste_voice(state),
+                _ => vec![],
             },
 
             VoiceEditSection::Oscillator => match key.code {
-                KeyCode::Left  => self.cycle_osc(state, -1),
-                KeyCode::Right => self.cycle_osc(state,  1),
-                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Envelope; None }
-                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; None }
-                _ => None,
+                KeyCode::Left  => self.cycle_osc(state, -1).into_iter().collect(),
+                KeyCode::Right => self.cycle_osc(state,  1).into_iter().collect(),
+                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Envelope; vec![] }
+                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; vec![] }
+                _ => vec![],
             },
 
             VoiceEditSection::Envelope => match key.code {
-                KeyCode::Up    => { self.selected_env_param = self.selected_env_param.saturating_sub(1); None }
-                KeyCode::Down  => { self.selected_env_param = (self.selected_env_param + 1).min(3); None }
-                KeyCode::Left  => self.adjust_envelope(state, -0.05),
-                KeyCode::Right => self.adjust_envelope(state,  0.05),
-                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Sends; None }
-                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; None }
-                _ => None,
+                KeyCode::Up    => { self.selected_env_param = self.selected_env_param.saturating_sub(1); vec![] }
+                KeyCode::Down  => { self.selected_env_param = (self.selected_env_param + 1).min(3); vec![] }
+                KeyCode::Left  => self.adjust_envelope(state, -0.05).into_iter().collect(),
+                KeyCode::Right => self.adjust_envelope(state,  0.05).into_iter().collect(),
+                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Sends; vec![] }
+                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; vec![] }
+                _ => vec![],
             },
 
             VoiceEditSection::Sends => match key.code {
-                KeyCode::Up    => { self.selected_send = self.selected_send.saturating_sub(1); None }
-                KeyCode::Down  => { self.selected_send = (self.selected_send + 1).min(3); None }
-                KeyCode::Left  => self.adjust_send(state, -0.05),
-                KeyCode::Right => self.adjust_send(state,  0.05),
-                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Grid; None }
-                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; None }
-                _ => None,
+                KeyCode::Up    => { self.selected_send = self.selected_send.saturating_sub(1); vec![] }
+                KeyCode::Down  => { self.selected_send = (self.selected_send + 1).min(3); vec![] }
+                KeyCode::Left  => self.adjust_send(state, -0.05).into_iter().collect(),
+                KeyCode::Right => self.adjust_send(state,  0.05).into_iter().collect(),
+                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Grid; vec![] }
+                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; vec![] }
+                _ => vec![],
             },
         }
+    }
+
+    fn copy_voice(&mut self, state: &SynthState) {
+        let voice = &state.voices[self.selected_voice];
+        self.clipboard = Some(VoiceClipboard {
+            osc_type: voice.osc_type,
+            envelope: voice.envelope.clone(),
+            sends: state.routing[self.selected_voice],
+        });
+    }
+
+    fn paste_voice(&self, state: &SynthState) -> Vec<ConfigCommand> {
+        let Some(ref clip) = self.clipboard else { return vec![]; };
+        let dst = self.selected_voice;
+
+        // Don't paste onto the same voice the clipboard was copied from
+        // (detect by checking if config already matches — just paste anyway, it's harmless)
+        let _ = state; // state available if we need it for guards
+
+        let mut cmds = vec![
+            ConfigCommand::SetOscillator { voice: dst, osc_type: clip.osc_type },
+            ConfigCommand::SetEnvelope {
+                voice: dst,
+                attack:  clip.envelope.attack,
+                decay:   clip.envelope.decay,
+                sustain: clip.envelope.sustain,
+                release: clip.envelope.release,
+            },
+        ];
+        for g in 0..4 {
+            cmds.push(ConfigCommand::SetSendLevel { voice: dst, group: g, level: clip.sends[g] });
+        }
+        cmds
     }
 
     fn cycle_osc(&self, state: &SynthState, dir: i32) -> Option<ConfigCommand> {
@@ -309,28 +356,20 @@ impl VoicePanel {
         let current = state.voices[self.selected_voice].osc_type;
         let idx = types.iter().position(|&t| t == current).unwrap_or(0) as i32;
         let new_idx = (idx + dir).rem_euclid(types.len() as i32) as usize;
-        Some(ConfigCommand::SetOscillator {
-            voice: self.selected_voice,
-            osc_type: types[new_idx],
-        })
+        Some(ConfigCommand::SetOscillator { voice: self.selected_voice, osc_type: types[new_idx] })
     }
 
     fn adjust_envelope(&self, state: &SynthState, delta: f32) -> Option<ConfigCommand> {
         let env = &state.voices[self.selected_voice].envelope;
-        let (attack, decay, sustain, release) = (env.attack, env.decay, env.sustain, env.release);
-
-        // Clamp ranges: A/D/R in seconds, S is 0-1
+        let (a, d, s, r) = (env.attack, env.decay, env.sustain, env.release);
         let (new_a, new_d, new_s, new_r) = match self.selected_env_param {
-            0 => ((attack  + delta * 2.0).clamp(0.001, 10.0), decay, sustain, release),
-            1 => (attack, (decay   + delta * 2.0).clamp(0.001, 10.0), sustain, release),
-            2 => (attack, decay,   (sustain + delta).clamp(0.0, 1.0), release),
-            3 => (attack, decay,   sustain, (release + delta * 2.0).clamp(0.001, 10.0)),
+            0 => ((a + delta * 2.0).clamp(0.001, 10.0), d, s, r),
+            1 => (a, (d + delta * 2.0).clamp(0.001, 10.0), s, r),
+            2 => (a, d, (s + delta).clamp(0.0, 1.0), r),
+            3 => (a, d, s, (r + delta * 2.0).clamp(0.001, 10.0)),
             _ => return None,
         };
-        Some(ConfigCommand::SetEnvelope {
-            voice: self.selected_voice,
-            attack: new_a, decay: new_d, sustain: new_s, release: new_r,
-        })
+        Some(ConfigCommand::SetEnvelope { voice: self.selected_voice, attack: new_a, decay: new_d, sustain: new_s, release: new_r })
     }
 
     fn adjust_send(&self, state: &SynthState, delta: f32) -> Option<ConfigCommand> {

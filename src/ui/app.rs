@@ -122,7 +122,7 @@ impl App {
         let help = match self.mode {
             UIMode::Voices   => self.voice_panel.help_text(),
             UIMode::FxGroups => "↑↓:Select effect  ←→:Adjust param  a:Add  d:Delete  e:Toggle  Tab:Mode  q:Quit",
-            UIMode::Routing  => "↑↓:Voice  Tab:Group  ←→:Adjust level  c:Copy  p:Paste  z:Zero  q:Quit",
+            UIMode::Routing  => "↑↓:Voice  []:Group  ←→:Adjust level  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  q:Quit",
         };
         let p = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
         frame.render_widget(p, area);
@@ -135,12 +135,13 @@ impl App {
             return;
         }
 
-        // Tab switches mode only when the voice panel is in Grid mode
-        // (in other sections Tab moves between sub-sections)
+        // Tab switches mode, except when the voice panel is in an edit sub-section
+        // (where Tab cycles between Oscillator/Envelope/Sends sub-sections).
         let voices_in_grid = self.mode == UIMode::Voices
             && self.voice_panel.edit_section == VoiceEditSection::Grid;
+        let tab_switches_mode = self.mode != UIMode::Voices || voices_in_grid;
 
-        if key.code == KeyCode::Tab && (self.mode != UIMode::Voices || voices_in_grid) {
+        if key.code == KeyCode::Tab && tab_switches_mode {
             self.mode = match self.mode {
                 UIMode::Voices   => UIMode::FxGroups,
                 UIMode::FxGroups => UIMode::Routing,
@@ -150,9 +151,9 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Char('1') if voices_in_grid => { self.mode = UIMode::Voices; return; }
-            KeyCode::Char('2') if voices_in_grid => { self.mode = UIMode::FxGroups; return; }
-            KeyCode::Char('3') if voices_in_grid => { self.mode = UIMode::Routing; return; }
+            KeyCode::Char('1') if tab_switches_mode => { self.mode = UIMode::Voices; return; }
+            KeyCode::Char('2') if tab_switches_mode => { self.mode = UIMode::FxGroups; return; }
+            KeyCode::Char('3') if tab_switches_mode => { self.mode = UIMode::Routing; return; }
             _ => {}
         }
 
@@ -164,7 +165,7 @@ impl App {
     }
 
     fn handle_voices_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
-        if let Some(cmd) = self.voice_panel.handle_key(key, state) {
+        for cmd in self.voice_panel.handle_key(key, state) {
             let _ = self.config_tx.try_send(cmd);
         }
     }
@@ -244,9 +245,9 @@ impl App {
             KeyCode::Up   => { panel.selected_voice = panel.selected_voice.saturating_sub(1); }
             KeyCode::Down => { panel.selected_voice = (panel.selected_voice + 1).min(15); }
 
-            // Tab / Shift-Tab cycle groups
-            KeyCode::Tab      => { panel.selected_group = (panel.selected_group + 1) % 4; }
-            KeyCode::BackTab  => { panel.selected_group = panel.selected_group.checked_sub(1).unwrap_or(3); }
+            // [ / ] cycle groups (Tab is reserved for mode switching)
+            KeyCode::Char(']') => { panel.selected_group = (panel.selected_group + 1) % 4; }
+            KeyCode::Char('[') => { panel.selected_group = panel.selected_group.checked_sub(1).unwrap_or(3); }
 
             // ← → directly adjust the selected cell's send level
             KeyCode::Left => {
