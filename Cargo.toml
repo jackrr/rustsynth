@@ -1,0 +1,17 @@
+[package]
+name = "rustsynth"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ratatui = "0.28"
+crossterm = "0.28"
+cpal = "0.15"
+tokio = { version = "1.40", features = ["full"] }
+crossbeam-channel = "0.5"
+arc-swap = "1.7"
+nom = "7.1"
+anyhow = "1.0"
+
+[profile.release]
+opt-level = 3

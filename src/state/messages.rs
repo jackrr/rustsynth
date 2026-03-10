@@ -1,0 +1,145 @@
+/// A note-on command from UDP
+#[derive(Debug, Clone)]
+pub struct NoteCommand {
+    pub channel: usize,    // 0-15
+    pub midi_note: u8,     // MIDI note number
+    pub velocity: f32,     // 0.0-1.0
+    pub length_samples: u64, // Duration in samples before auto-release
+}
+
+/// Configuration changes sent from TUI to audio thread
+#[derive(Debug, Clone)]
+pub enum ConfigCommand {
+    SetOscillator { voice: usize, osc_type: OscillatorType },
+    SetEnvelope { voice: usize, attack: f32, decay: f32, sustain: f32, release: f32 },
+    SetSendLevel { voice: usize, group: usize, level: f32 },
+    AddEffect { group: usize, effect_type: EffectType, position: usize },
+    RemoveEffect { group: usize, position: usize },
+    SetEffectParam { group: usize, effect_idx: usize, param: String, value: f32 },
+    EnableGroup { group: usize, enabled: bool },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum OscillatorType {
+    Sine,
+    Triangle,
+    Square,
+    Sawtooth,
+    Sine2,
+    Sine3,
+    Sine4,
+    Triangle2,
+    Triangle3,
+    Triangle4,
+    Square2,
+    Square3,
+    Square4,
+    Sawtooth2,
+    Sawtooth3,
+    Sawtooth4,
+}
+
+impl OscillatorType {
+    pub fn name(&self) -> &str {
+        match self {
+            OscillatorType::Sine => "Sine",
+            OscillatorType::Triangle => "Triangle",
+            OscillatorType::Square => "Square",
+            OscillatorType::Sawtooth => "Sawtooth",
+            OscillatorType::Sine2 => "Sine2",
+            OscillatorType::Sine3 => "Sine3",
+            OscillatorType::Sine4 => "Sine4",
+            OscillatorType::Triangle2 => "Triangle2",
+            OscillatorType::Triangle3 => "Triangle3",
+            OscillatorType::Triangle4 => "Triangle4",
+            OscillatorType::Square2 => "Square2",
+            OscillatorType::Square3 => "Square3",
+            OscillatorType::Square4 => "Square4",
+            OscillatorType::Sawtooth2 => "Sawtooth2",
+            OscillatorType::Sawtooth3 => "Sawtooth3",
+            OscillatorType::Sawtooth4 => "Sawtooth4",
+        }
+    }
+
+    pub fn all() -> &'static [OscillatorType] {
+        &[
+            OscillatorType::Sine,
+            OscillatorType::Triangle,
+            OscillatorType::Square,
+            OscillatorType::Sawtooth,
+            OscillatorType::Sine2,
+            OscillatorType::Sine3,
+            OscillatorType::Sine4,
+            OscillatorType::Triangle2,
+            OscillatorType::Triangle3,
+            OscillatorType::Triangle4,
+            OscillatorType::Square2,
+            OscillatorType::Square3,
+            OscillatorType::Square4,
+            OscillatorType::Sawtooth2,
+            OscillatorType::Sawtooth3,
+            OscillatorType::Sawtooth4,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum EffectType {
+    Gain,
+    Bitcrusher,
+    Distortion,
+    Limiter,
+    Delay,
+    Reverb,
+    Tremolo,
+    Chorus,
+    Phaser,
+    Vibrato,
+    Lowpass,
+    Highpass,
+    Bandpass,
+    Eq3,
+    Compressor,
+}
+
+impl EffectType {
+    pub fn name(&self) -> &str {
+        match self {
+            EffectType::Gain => "Gain",
+            EffectType::Bitcrusher => "Bitcrusher",
+            EffectType::Distortion => "Distortion",
+            EffectType::Limiter => "Limiter",
+            EffectType::Delay => "Delay",
+            EffectType::Reverb => "Reverb",
+            EffectType::Tremolo => "Tremolo",
+            EffectType::Chorus => "Chorus",
+            EffectType::Phaser => "Phaser",
+            EffectType::Vibrato => "Vibrato",
+            EffectType::Lowpass => "Lowpass",
+            EffectType::Highpass => "Highpass",
+            EffectType::Bandpass => "Bandpass",
+            EffectType::Eq3 => "EQ3",
+            EffectType::Compressor => "Compressor",
+        }
+    }
+
+    pub fn all() -> &'static [EffectType] {
+        &[
+            EffectType::Gain,
+            EffectType::Bitcrusher,
+            EffectType::Distortion,
+            EffectType::Limiter,
+            EffectType::Delay,
+            EffectType::Reverb,
+            EffectType::Tremolo,
+            EffectType::Chorus,
+            EffectType::Phaser,
+            EffectType::Vibrato,
+            EffectType::Lowpass,
+            EffectType::Highpass,
+            EffectType::Bandpass,
+            EffectType::Eq3,
+            EffectType::Compressor,
+        ]
+    }
+}
