@@ -51,11 +51,7 @@ impl EnvelopeGenerator {
         self.level
     }
 
-    pub fn stage(&self) -> EnvelopeStage {
-        self.stage
-    }
-
-    /// Advance envelope by one sample and return current amplitude
+/// Advance envelope by one sample and return current amplitude
     pub fn next_sample(&mut self) -> f32 {
         match self.stage {
             EnvelopeStage::Idle => {

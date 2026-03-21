@@ -29,6 +29,7 @@ pub struct VoiceClipboard {
 pub struct VoicePanel {
     pub selected_voice: usize,
     pub edit_section: VoiceEditSection,
+    pub selected_osc_field: usize,  // 0=waveform  1=note  2=velocity
     pub selected_env_param: usize,  // 0=Attack 1=Decay 2=Sustain 3=Release
     pub selected_send: usize,       // 0-3 = group A-D
     pub clipboard: Option<VoiceClipboard>,
@@ -39,6 +40,7 @@ impl VoicePanel {
         VoicePanel {
             selected_voice: 0,
             edit_section: VoiceEditSection::Grid,
+            selected_osc_field: 0,
             selected_env_param: 0,
             selected_send: 0,
             clipboard: None,
@@ -160,58 +162,32 @@ impl VoicePanel {
             .constraints([Constraint::Min(8), Constraint::Length(10)])
             .split(area);
 
+        // Narrow left/right panels so the envelope shape gets most of the width.
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(30),
-                Constraint::Percentage(40),
-                Constraint::Percentage(30),
+                Constraint::Percentage(20),  // osc + env params (stacked)
+                Constraint::Percentage(57),  // adsr shape
+                Constraint::Percentage(23),  // sends
             ])
             .split(rows[0]);
 
-        // --- Oscillator ---
-        let osc_types = OscillatorType::all();
-        let osc_idx = osc_types.iter().position(|&t| t == voice.osc_type).unwrap_or(0);
-        let osc_focused = self.edit_section == VoiceEditSection::Oscillator;
+        // --- Left: stacked Osc + Env params ---
+        render_params_panel(
+            frame, chunks[0], state, self.selected_voice,
+            self.edit_section, self.selected_osc_field, self.selected_env_param,
+        );
 
-        let osc_lines = vec![
-            Line::from(vec![
-                Span::raw("Type: "),
-                Span::styled(
-                    format!("◄ {} ►", voice.osc_type.name()),
-                    if osc_focused { Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD) }
-                    else { Style::default().fg(Color::Cyan) },
-                ),
-            ]),
-            Line::from(format!("  ({}/{})", osc_idx + 1, osc_types.len())),
-            Line::from(format!("Note: {}", midi_note_name(voice.midi_note))),
-            Line::from(format!("Vel:  {:.0}%", voice.velocity * 100.0)),
-            Line::from(""),
-            Line::from(if osc_focused {
-                Span::styled("←→ cycle types", Style::default().fg(Color::Yellow))
-            } else {
-                Span::styled("Enter to edit", Style::default().fg(Color::DarkGray))
-            }),
-        ];
-        let osc_title = if osc_focused { "Oscillator [editing]" } else { "Oscillator" };
-        let osc_block = Paragraph::new(osc_lines)
-            .block(Block::default().title(osc_title).borders(Borders::ALL).border_style(
-                if osc_focused { Style::default().fg(Color::Yellow) } else { Style::default() }
-            ));
-        frame.render_widget(osc_block, chunks[0]);
+        // --- Middle: ADSR shape ---
+        render_adsr_shape(frame, chunks[1], &voice.envelope);
 
-        // --- Envelope ---
-        let env = &voice.envelope;
-        let env_focused = self.edit_section == VoiceEditSection::Envelope;
-        render_envelope_diagram(frame, chunks[1], env, env_focused, self.selected_env_param);
-
-        // --- Sends ---
+        // --- Right: Sends ---
         let send_labels = ["A", "B", "C", "D"];
         let sends_focused = self.edit_section == VoiceEditSection::Sends;
 
         let sends: Vec<ListItem> = (0..4).map(|g| {
             let level = state.routing[self.selected_voice][g];
-            let bar = send_bar(level, 12);
+            let bar = send_bar(level, 10);
             let is_selected = sends_focused && g == self.selected_send;
             let style = if is_selected {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
@@ -227,7 +203,7 @@ impl VoicePanel {
             ))
         }).collect();
 
-        let send_title = if sends_focused { "Sends [↑↓:group  ←→:adjust]" } else { "Sends" };
+        let send_title = if sends_focused { "Sends [↑↓  ←→]" } else { "Sends" };
         let sends_list = List::new(sends)
             .block(Block::default().title(send_title).borders(Borders::ALL).border_style(
                 if sends_focused { Style::default().fg(Color::Yellow) } else { Style::default() }
@@ -243,7 +219,7 @@ impl VoicePanel {
             VoiceEditSection::Grid =>
                 "↑↓←→:Navigate  Space:Trigger C4  Enter:Edit  o:Cycle osc  c:Copy voice  p:Paste voice  Tab:Mode  q:Quit",
             VoiceEditSection::Oscillator =>
-                "←→:Cycle osc type  Tab:Next section  Esc:Back to grid  q:Quit",
+                "↑↓:Field  ←→:Adjust  (Wave: cycle type  Note: semitone/octave  Vel: ±5%)  Shift:fine  Tab:Next  Esc:Grid",
             VoiceEditSection::Envelope =>
                 "↑↓:Select param  ←→:Adjust value  Tab:Next section  Esc:Back to grid  q:Quit",
             VoiceEditSection::Sends =>
@@ -270,8 +246,10 @@ impl VoicePanel {
             },
 
             VoiceEditSection::Oscillator => match key.code {
-                KeyCode::Left  => self.cycle_osc(state, -1).into_iter().collect(),
-                KeyCode::Right => self.cycle_osc(state,  1).into_iter().collect(),
+                KeyCode::Up    => { self.selected_osc_field = self.selected_osc_field.saturating_sub(1); vec![] }
+                KeyCode::Down  => { self.selected_osc_field = (self.selected_osc_field + 1).min(2); vec![] }
+                KeyCode::Left  => self.adjust_osc_field(state, -1, key.modifiers.contains(KeyModifiers::SHIFT)),
+                KeyCode::Right => self.adjust_osc_field(state,  1, key.modifiers.contains(KeyModifiers::SHIFT)),
                 KeyCode::Tab   => { self.edit_section = VoiceEditSection::Envelope; vec![] }
                 KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; vec![] }
                 _ => vec![],
@@ -340,6 +318,25 @@ impl VoicePanel {
         Some(ConfigCommand::SetOscillator { voice: self.selected_voice, osc_type: types[new_idx] })
     }
 
+    fn adjust_osc_field(&self, state: &SynthState, dir: i32, fine: bool) -> Vec<ConfigCommand> {
+        match self.selected_osc_field {
+            0 => self.cycle_osc(state, dir).into_iter().collect(),
+            1 => {
+                let cur = state.voices[self.selected_voice].default_midi_note as i32;
+                let step: i32 = if fine { 1 } else { 12 };
+                let new_note = (cur + dir * step).clamp(0, 127) as u8;
+                vec![ConfigCommand::SetDefaultNote { voice: self.selected_voice, midi_note: new_note }]
+            }
+            2 => {
+                let cur = state.voices[self.selected_voice].default_velocity;
+                let step = if fine { 0.01 } else { 0.05 };
+                let new_vel = (cur + dir as f32 * step).clamp(0.0, 1.0);
+                vec![ConfigCommand::SetDefaultVelocity { voice: self.selected_voice, velocity: new_vel }]
+            }
+            _ => vec![],
+        }
+    }
+
     fn adjust_envelope(&self, state: &SynthState, dir: i32, fine: bool) -> Option<ConfigCommand> {
         let env = &state.voices[self.selected_voice].envelope;
         let (a, d, s, r) = (env.attack, env.decay, env.sustain, env.release);
@@ -371,116 +368,235 @@ fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 3 || inner.width < 4 || scope.is_empty() {
+    if inner.height < 2 || inner.width < 4 || scope.is_empty() {
         return;
     }
 
-    let chart_h = inner.height as usize;
-    let chart_w = inner.width as usize;
+    // Braille characters give 2 dots wide × 4 dots tall per terminal cell.
+    let dot_w = inner.width as usize * 2;
+    let dot_h = inner.height as usize * 4;
 
-    // For each display column, find min/max of the samples mapped to it
-    let samples_per_col = (scope.len() as f32 / chart_w as f32).max(1.0);
-    let center_row = (chart_h - 1) / 2;
+    // Zero-crossing sync: find the first rising edge so the waveform is stable.
+    let sync_pos = (1..scope.len().saturating_sub(dot_w + 2))
+        .find(|&i| scope[i - 1] < 0.0 && scope[i] >= 0.0)
+        .unwrap_or(0);
 
-    // Map amplitude (-1.0..1.0) to row (0=top=+1.0, bottom=-1.0)
-    let to_row = |v: f32| -> usize {
-        ((1.0 - v.clamp(-1.0, 1.0)) / 2.0 * (chart_h - 1) as f32).round() as usize
+    // Period detection: find the next rising edge to measure one cycle.
+    let next_crossing = ((sync_pos + 4).min(scope.len())..scope.len().saturating_sub(1))
+        .find(|&i| scope[i - 1] < 0.0 && scope[i] >= 0.0);
+
+    // Show ~2.5 periods for a clear waveform shape; fall back to a wide window.
+    let display_len = if let Some(next) = next_crossing {
+        let period = next - sync_pos;
+        ((period as f32 * 2.5) as usize)
+            .clamp(32, scope.len().saturating_sub(sync_pos))
+    } else {
+        (dot_w * 3).min(scope.len().saturating_sub(sync_pos))
     };
 
-    // Build grid: (char, Color)
-    let mut grid: Vec<Vec<(char, Color)>> = vec![vec![(' ', Color::Reset); chart_w]; chart_h];
+    let samples = &scope[sync_pos..(sync_pos + display_len).min(scope.len())];
+    if samples.len() < 2 { return; }
 
-    // Draw center line
-    for x in 0..chart_w {
-        grid[center_row][x] = ('·', Color::DarkGray);
-    }
+    // Build boolean dot grid (row-major).
+    let mut dots = vec![false; dot_w * dot_h];
 
-    // Draw waveform as min-max bars per column
-    for x in 0..chart_w {
-        let start = ((x as f32 * samples_per_col) as usize).min(scope.len().saturating_sub(1));
-        let end   = (((x + 1) as f32 * samples_per_col) as usize).min(scope.len());
-        let slice = &scope[start..end.max(start + 1).min(scope.len())];
+    // Zoom in on the y-axis so ±0.5 fills the display — shows waveform detail.
+    let to_dot_row = |v: f32| -> usize {
+        let zoom = 0.55_f32;
+        let norm = (1.0 - (v / zoom).clamp(-1.0, 1.0)) / 2.0;
+        (norm * (dot_h - 1) as f32).round() as usize
+    };
 
-        let min_v = slice.iter().cloned().fold(f32::INFINITY, f32::min);
-        let max_v = slice.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    // Sample value at a dot-column using linear interpolation.
+    let interp = |dx: usize| -> f32 {
+        let t = dx as f32 / (dot_w - 1).max(1) as f32;
+        let si_f = t * (samples.len() - 1) as f32;
+        let si0 = si_f as usize;
+        let si1 = (si0 + 1).min(samples.len() - 1);
+        let frac = si_f - si0 as f32;
+        samples[si0] * (1.0 - frac) + samples[si1] * frac
+    };
 
-        let top_row = to_row(max_v);
-        let bot_row = to_row(min_v);
-
-        // Color based on absolute amplitude (green → yellow → red)
-        let peak = max_v.abs().max(min_v.abs());
-        let color = if peak > 0.8 { Color::Red }
-                    else if peak > 0.5 { Color::Yellow }
-                    else { Color::Green };
-
-        for yr in top_row..=bot_row {
-            if yr < chart_h {
-                let ch = if yr == top_row && yr == bot_row { '▪' }
-                         else if yr == top_row { '▀' }
-                         else if yr == bot_row { '▄' }
-                         else { '█' };
-                grid[yr][x] = (ch, color);
-            }
+    // Draw a connected line through each dot column.
+    for dx in 0..dot_w {
+        let row = to_dot_row(interp(dx));
+        let prev_row = if dx > 0 { to_dot_row(interp(dx - 1)) } else { row };
+        let (r_min, r_max) = if row <= prev_row { (row, prev_row) } else { (prev_row, row) };
+        for r in r_min..=r_max {
+            if r < dot_h { dots[r * dot_w + dx] = true; }
         }
     }
 
-    // Render
-    let lines: Vec<Line> = grid.iter().map(|row| {
-        Line::from(row.iter().map(|(ch, color)| {
-            let style = if *ch == '·' {
-                Style::default().fg(*color)
+    // Braille dot-to-bit mapping within each 2×4 character cell.
+    // (row_offset, col_offset, bit)
+    const DOT_MAP: [(usize, usize, u32); 8] = [
+        (0, 0, 0x01), (1, 0, 0x02), (2, 0, 0x04), (3, 0, 0x40),
+        (0, 1, 0x08), (1, 1, 0x10), (2, 1, 0x20), (3, 1, 0x80),
+    ];
+
+    let center_char_row = dot_h / 2 / 4;
+
+    let lines: Vec<Line> = (0..inner.height as usize).map(|cy| {
+        Line::from((0..inner.width as usize).map(|cx| {
+            let mut bits: u32 = 0;
+            for (dr, dc, bit) in &DOT_MAP {
+                let r = cy * 4 + dr;
+                let c = cx * 2 + dc;
+                if r < dot_h && c < dot_w && dots[r * dot_w + c] { bits |= bit; }
+            }
+
+            let (ch, color) = if bits != 0 {
+                let ch = char::from_u32(0x2800 + bits).unwrap_or('?');
+                // Amplitude-based color: sample nearest the center of this cell
+                let cx_dot = cx * 2 + 1;
+                let t = cx_dot as f32 / (dot_w - 1).max(1) as f32;
+                let si = (t * (samples.len() - 1) as f32) as usize;
+                let amp = samples[si.min(samples.len() - 1)].abs();
+                let color = if amp > 0.8 { Color::Red }
+                            else if amp > 0.4 { Color::Yellow }
+                            else { Color::Green };
+                (ch, color)
+            } else if cy == center_char_row {
+                ('·', Color::DarkGray)
             } else {
-                Style::default().fg(*color).add_modifier(Modifier::BOLD)
+                (' ', Color::Reset)
             };
-            Span::styled(ch.to_string(), style)
+
+            Span::styled(ch.to_string(), Style::default().fg(color))
         }).collect::<Vec<_>>())
     }).collect();
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-fn render_envelope_diagram(
+/// Combined oscillator + envelope params panel (left column of voice detail).
+fn render_params_panel(
     frame: &mut Frame,
     area: Rect,
-    env: &EnvelopeParams,
-    focused: bool,
-    selected_param: usize,
+    state: &SynthState,
+    voice_idx: usize,
+    edit_section: VoiceEditSection,
+    selected_osc_field: usize,
+    selected_env_param: usize,
 ) {
-    let title = if focused { "Envelope [↑↓:param  ←→:adjust]" } else { "Envelope" };
-    let border_style = if focused { Style::default().fg(Color::Yellow) } else { Style::default() };
+    let v = &state.voices[voice_idx];
+    let osc_focused = edit_section == VoiceEditSection::Oscillator;
+    let env_focused = edit_section == VoiceEditSection::Envelope;
+
+    let title = match edit_section {
+        VoiceEditSection::Oscillator => "Params [↑↓  ←→]",
+        VoiceEditSection::Envelope   => "Params [↑↓  ←→]",
+        _                            => "Params",
+    };
+    let border_style = if osc_focused || env_focused {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
     let block = Block::default().title(title).borders(Borders::ALL).border_style(border_style);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 5 || inner.width < 10 {
-        return;
-    }
+    if inner.height < 2 { return; }
 
-    let chart_h = inner.height.saturating_sub(2) as usize;
-    let chart_w = inner.width as usize;
+    let osc_types = OscillatorType::all();
+    let osc_idx = osc_types.iter().position(|&t| t == v.osc_type).unwrap_or(0);
 
-    const PHASE_COLORS: [Color; 4] = [Color::Green, Color::Yellow, Color::Cyan, Color::Magenta];
-    const PHASE_NAMES: [&str; 4] = ["A", "D", "S", "R"];
-
-    // Proportional column widths; sustain gets a fixed display time
-    let sustain_t = 0.3f32;
-    let total_t = env.attack + env.decay + sustain_t + env.release;
-    let a_cols = ((env.attack / total_t) * chart_w as f32).round() as usize;
-    let d_cols = ((env.decay  / total_t) * chart_w as f32).round() as usize;
-    let r_cols = ((env.release / total_t) * chart_w as f32).round() as usize;
-    let s_cols = chart_w.saturating_sub(a_cols + d_cols + r_cols);
-
-    // Where each phase starts (column index)
-    let phase_starts = [a_cols, a_cols + d_cols, a_cols + d_cols + s_cols];
-    let phase_ranges = [
-        (0,                        a_cols),
-        (a_cols,                   a_cols + d_cols),
-        (a_cols + d_cols,          a_cols + d_cols + s_cols),
-        (a_cols + d_cols + s_cols, chart_w),
+    let osc_fields: [(&str, String); 3] = [
+        ("Wave", format!("◄{}►  {}/{}", v.osc_type.name(), osc_idx + 1, osc_types.len())),
+        ("Note", midi_note_name(v.default_midi_note)),
+        ("Vel",  format!("{:.0}%", v.default_velocity * 100.0)),
     ];
 
-    // Envelope amplitude value (0.0–1.0) for each column
-    let values: Vec<f32> = (0..chart_w).map(|x| {
+    const PHASE_COLORS: [Color; 4] = [Color::Green, Color::Yellow, Color::Cyan, Color::Magenta];
+    let env = &v.envelope;
+    let env_fields: [(&str, f32, &str, f32, f32); 4] = [
+        ("A", env.attack,  "s", 0.001, 10.0),
+        ("D", env.decay,   "s", 0.001, 10.0),
+        ("S", env.sustain, "",  0.0,   1.0),
+        ("R", env.release, "s", 0.001, 10.0),
+    ];
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // OSC section header
+    lines.push(Line::styled(
+        " OSC",
+        Style::default().fg(if osc_focused { Color::Yellow } else { Color::DarkGray })
+            .add_modifier(if osc_focused { Modifier::BOLD } else { Modifier::empty() }),
+    ));
+    for (i, (label, value)) in osc_fields.iter().enumerate() {
+        let is_sel = osc_focused && i == selected_osc_field;
+        let ind = if is_sel { "►" } else { " " };
+        if is_sel {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(value.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::DarkGray)),
+                Span::raw(value.clone()),
+            ]));
+        }
+    }
+
+    lines.push(Line::raw(""));
+
+    // ENV section header
+    lines.push(Line::styled(
+        " ENV",
+        Style::default().fg(if env_focused { Color::Yellow } else { Color::DarkGray })
+            .add_modifier(if env_focused { Modifier::BOLD } else { Modifier::empty() }),
+    ));
+    for (i, (name, val, unit, min, max)) in env_fields.iter().enumerate() {
+        let is_sel = env_focused && i == selected_env_param;
+        let color = PHASE_COLORS[i];
+        let bar = mini_bar(*val, *min, *max, 4);
+        let ind = if is_sel { "►" } else { " " };
+        let text = format!("{}{} {:.2}{} {}", ind, name, val, unit, bar);
+        let style = if is_sel {
+            Style::default().fg(color).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED)
+        } else {
+            Style::default().fg(color)
+        };
+        lines.push(Line::styled(text, style));
+    }
+
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// ADSR shape rendered with braille dots for sub-character resolution.
+fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
+    let block = Block::default().title("Envelope").borders(Borders::ALL);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if inner.height < 2 || inner.width < 4 { return; }
+
+    let dot_w = inner.width as usize * 2;
+    let dot_h = inner.height as usize * 4;
+
+    const PHASE_COLORS: [Color; 4] = [Color::Green, Color::Yellow, Color::Cyan, Color::Magenta];
+
+    // Proportional dot-column widths per phase.
+    let sustain_t = 0.3f32;
+    let total_t = env.attack + env.decay + sustain_t + env.release;
+    let a_cols = ((env.attack  / total_t) * dot_w as f32).round() as usize;
+    let d_cols = ((env.decay   / total_t) * dot_w as f32).round() as usize;
+    let r_cols = ((env.release / total_t) * dot_w as f32).round() as usize;
+    let s_cols = dot_w.saturating_sub(a_cols + d_cols + r_cols);
+
+    let phase_of = |x: usize| -> usize {
+        if x < a_cols { 0 }
+        else if x < a_cols + d_cols { 1 }
+        else if x < a_cols + d_cols + s_cols { 2 }
+        else { 3 }
+    };
+
+    // Envelope amplitude (0..1) at each dot column, with linear interpolation
+    // so even tiny phases have smooth slopes.
+    let envelope_at = |x: usize| -> f32 {
         if x < a_cols {
             if a_cols > 0 { x as f32 / a_cols as f32 } else { 1.0 }
         } else if x < a_cols + d_cols {
@@ -492,115 +608,90 @@ fn render_envelope_diagram(
             let t = (x - a_cols - d_cols - s_cols) as f32 / r_cols.max(1) as f32;
             (env.sustain * (1.0 - t)).max(0.0)
         }
-    }).collect();
-
-    // Amplitude -> row (row 0 = top = 1.0, row chart_h-1 = bottom = 0.0)
-    let to_row = |v: f32| -> usize {
-        ((1.0 - v.clamp(0.0, 1.0)) * (chart_h - 1) as f32).round() as usize
     };
 
-    let phase_of = |x: usize| -> usize {
-        if x < a_cols { 0 } else if x < a_cols + d_cols { 1 } else if x < a_cols + d_cols + s_cols { 2 } else { 3 }
+    // Map amplitude to dot row: 1.0 → row 0 (top), 0.0 → row dot_h-1 (bottom).
+    let to_dot_row = |v: f32| -> usize {
+        ((1.0 - v.clamp(0.0, 1.0)) * (dot_h - 1) as f32).round() as usize
     };
 
-    // Build character grid: (char, Color, bold)
-    let mut grid: Vec<Vec<(char, Color, bool)>> =
-        vec![vec![(' ', Color::Reset, false); chart_w]; chart_h];
+    // Dot grid: each entry is (set, color).
+    let mut dots: Vec<(bool, Color)> = vec![(false, Color::Reset); dot_w * dot_h];
 
-    for x in 0..chart_w {
-        let v     = values[x];
-        let prev_v = if x > 0 { values[x - 1] } else { 0.0 };
-        let y      = to_row(v);
-        let prev_y = to_row(prev_v);
-        let color  = PHASE_COLORS[phase_of(x)];
+    for dx in 0..dot_w {
+        let outline_row = to_dot_row(envelope_at(dx));
+        let color = PHASE_COLORS[phase_of(dx)];
 
-        // Fill area below the line
-        for yr in (y + 1)..chart_h {
-            if grid[yr][x].0 == ' ' {
-                grid[yr][x] = ('░', color, false);
-            }
+        // Filled shape: all dots from outline down to the bottom.
+        for r in outline_row..dot_h {
+            dots[r * dot_w + dx] = (true, color);
         }
 
-        // Draw the outline character(s)
-        if x == 0 || y == prev_y {
-            if y < chart_h { grid[y][x] = ('─', color, true); }
-        } else {
-            let rising = v > prev_v;
-            let (y_min, y_max) = if y < prev_y { (y, prev_y) } else { (prev_y, y) };
-            for yr in y_min..=y_max {
-                if yr < chart_h {
-                    grid[yr][x] = (if rising { '╱' } else { '╲' }, color, true);
+        // Stitch to previous column to prevent gaps on steep slopes.
+        if dx > 0 {
+            let prev_outline = to_dot_row(envelope_at(dx - 1));
+            let prev_color = PHASE_COLORS[phase_of(dx - 1)];
+            if outline_row < prev_outline {
+                // Current column is higher: fill the gap on the current column.
+                for r in outline_row..prev_outline {
+                    dots[r * dot_w + dx] = (true, color);
                 }
-            }
-        }
-
-        // Phase boundary: dim vertical dashes in empty space only
-        if phase_starts.contains(&x) {
-            for yr in 0..chart_h {
-                if grid[yr][x].0 == ' ' {
-                    grid[yr][x] = ('┊', Color::DarkGray, false);
+            } else if prev_outline < outline_row {
+                // Previous column is higher: fill the gap there.
+                for r in prev_outline..outline_row {
+                    if !dots[r * dot_w + (dx - 1)].0 {
+                        dots[r * dot_w + (dx - 1)] = (true, prev_color);
+                    }
                 }
             }
         }
     }
 
-    // Render chart rows
-    let mut all_lines: Vec<Line> = grid.iter().map(|row| {
-        Line::from(row.iter().map(|(ch, color, bold)| {
-            let style = if *bold {
-                Style::default().fg(*color).add_modifier(Modifier::BOLD)
-            } else if *ch == '░' {
-                Style::default().fg(*color).add_modifier(Modifier::DIM)
+    // Braille dot-to-bit mapping within each 2×4 terminal cell.
+    const DOT_MAP: [(usize, usize, u32); 8] = [
+        (0, 0, 0x01), (1, 0, 0x02), (2, 0, 0x04), (3, 0, 0x40),
+        (0, 1, 0x08), (1, 1, 0x10), (2, 1, 0x20), (3, 1, 0x80),
+    ];
+
+    let h = inner.height as usize;
+    let w = inner.width as usize;
+
+    let lines: Vec<Line> = (0..h).map(|cy| {
+        Line::from((0..w).map(|cx| {
+            let mut bits: u32 = 0;
+            // Use the color of the topmost set dot in this cell (the outline row).
+            let mut cell_color = Color::DarkGray;
+            let mut top_set_row = dot_h;
+            for (dr, dc, bit) in &DOT_MAP {
+                let r = cy * 4 + dr;
+                let c = cx * 2 + dc;
+                if r < dot_h && c < dot_w {
+                    let (set, col) = dots[r * dot_w + c];
+                    if set {
+                        bits |= bit;
+                        if r < top_set_row {
+                            top_set_row = r;
+                            cell_color = col;
+                        }
+                    }
+                }
+            }
+            let ch = if bits != 0 {
+                char::from_u32(0x2800 + bits).unwrap_or('?')
             } else {
-                Style::default().fg(*color)
+                ' '
             };
-            Span::styled(ch.to_string(), style)
+            Span::styled(ch.to_string(), Style::default().fg(cell_color))
         }).collect::<Vec<_>>())
     }).collect();
 
-    // Phase label row — phase letter centered in its column range
-    let mut label_spans: Vec<Span> = Vec::new();
-    let mut cursor = 0usize;
-    for (p, (start, end)) in phase_ranges.iter().enumerate() {
-        let width = end - start;
-        if width == 0 { continue; }
-        let mid = start + width / 2;
-        if mid > cursor {
-            label_spans.push(Span::raw(" ".repeat(mid - cursor)));
-            cursor = mid;
-        }
-        let is_sel = p == selected_param && focused;
-        let style = if is_sel {
-            Style::default().fg(PHASE_COLORS[p]).add_modifier(Modifier::BOLD).add_modifier(Modifier::UNDERLINED)
-        } else {
-            Style::default().fg(PHASE_COLORS[p])
-        };
-        label_spans.push(Span::styled(PHASE_NAMES[p], style));
-        cursor += 1;
-    }
-    all_lines.push(Line::from(label_spans));
+    frame.render_widget(Paragraph::new(lines), inner);
+}
 
-    // Values row — highlighted when selected
-    let param_strs = [
-        (format!("A:{:.2}s", env.attack),  0usize),
-        (format!("D:{:.2}s", env.decay),   1),
-        (format!("S:{:.2} ", env.sustain), 2),
-        (format!("R:{:.2}s", env.release), 3),
-    ];
-    let mut value_spans: Vec<Span> = Vec::new();
-    for (i, (label, p)) in param_strs.iter().enumerate() {
-        if i > 0 { value_spans.push(Span::raw(" ")); }
-        let is_sel = *p == selected_param && focused;
-        let style = if is_sel {
-            Style::default().fg(PHASE_COLORS[*p]).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED)
-        } else {
-            Style::default().fg(PHASE_COLORS[*p])
-        };
-        value_spans.push(Span::styled(label.clone(), style));
-    }
-    all_lines.push(Line::from(value_spans));
-
-    frame.render_widget(Paragraph::new(all_lines), inner);
+fn mini_bar(value: f32, min: f32, max: f32, width: usize) -> String {
+    let range = (max - min).max(0.001);
+    let filled = (((value - min) / range).clamp(0.0, 1.0) * width as f32) as usize;
+    format!("{}{}", "█".repeat(filled), "░".repeat(width - filled))
 }
 
 fn midi_note_name(midi: u8) -> String {

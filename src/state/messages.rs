@@ -11,6 +11,8 @@ pub struct NoteCommand {
 #[derive(Debug, Clone)]
 pub enum ConfigCommand {
     SetOscillator { voice: usize, osc_type: OscillatorType },
+    SetDefaultNote { voice: usize, midi_note: u8 },
+    SetDefaultVelocity { voice: usize, velocity: f32 },
     SetEnvelope { voice: usize, attack: f32, decay: f32, sustain: f32, release: f32 },
     SetSendLevel { voice: usize, group: usize, level: f32 },
     AddEffect { group: usize, effect_type: EffectType, position: usize },
@@ -123,23 +125,4 @@ impl EffectType {
         }
     }
 
-    pub fn all() -> &'static [EffectType] {
-        &[
-            EffectType::Gain,
-            EffectType::Bitcrusher,
-            EffectType::Distortion,
-            EffectType::Limiter,
-            EffectType::Delay,
-            EffectType::Reverb,
-            EffectType::Tremolo,
-            EffectType::Chorus,
-            EffectType::Phaser,
-            EffectType::Vibrato,
-            EffectType::Lowpass,
-            EffectType::Highpass,
-            EffectType::Bandpass,
-            EffectType::Eq3,
-            EffectType::Compressor,
-        ]
-    }
 }

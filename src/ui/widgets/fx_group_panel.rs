@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
@@ -47,13 +47,7 @@ impl FxGroupPanel {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(70), Constraint::Percentage(30)])
-            .split(area);
-
-        self.render_groups(frame, chunks[0], state);
-        self.render_params(frame, chunks[1], state);
+        self.render_groups(frame, area, state);
 
         if self.show_picker {
             self.render_picker(frame, area);
@@ -61,50 +55,71 @@ impl FxGroupPanel {
     }
 
     fn render_groups(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
+        // Give the selected group a bit more vertical space for its inline param row
+        let constraints: Vec<Constraint> = (0..4).map(|i| {
+            if i == self.selected_group { Constraint::Ratio(2, 5) } else { Constraint::Ratio(1, 5) }
+        }).collect();
         let group_areas = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-                Constraint::Percentage(25),
-            ])
+            .constraints(constraints)
             .split(area);
 
         let group_names = ["A", "B", "C", "D"];
         for (i, group) in state.groups.iter().enumerate() {
             let is_selected = i == self.selected_group;
-            let title = format!(
-                "Group {}  {}",
-                group_names[i],
-                if group.enabled { "[On]" } else { "[Off]" }
-            );
+            let status = if group.enabled { "On" } else { "Off" };
+            let hint = if is_selected { "  ↑↓:effect  []:param  ←→:adjust  a:add  d:del  e:toggle" } else { "" };
+            let title = format!("Group {} [{}]{}", group_names[i], status, hint);
 
             let items: Vec<ListItem> = group.effects.iter().enumerate().map(|(j, e)| {
                 let is_effect_selected = is_selected && j == self.selected_effect;
-                let style = if is_effect_selected {
+                let effect_style = if is_effect_selected {
                     Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
                 };
                 let indicator = if is_effect_selected { "►" } else { " " };
-                let params_str: Vec<String> = e.params.iter()
-                    .map(|p| format!("{}: {:.2}", p.name, p.value))
-                    .collect();
-                ListItem::new(Line::styled(
-                    format!("{} {}. {}  ({})", indicator, j + 1, e.name, params_str.join(", ")),
-                    style,
-                ))
+                let main_line = Line::styled(
+                    format!("{} {}. {}", indicator, j + 1, e.name),
+                    effect_style,
+                );
+
+                if is_effect_selected && !e.params.is_empty() {
+                    // Inline param row: [selected:val] others dim
+                    let mut spans = vec![Span::raw("   ")];
+                    for (k, p) in e.params.iter().enumerate() {
+                        if k > 0 { spans.push(Span::raw("  ")); }
+                        let is_param_sel = k == self.selected_param;
+                        let val_str = if let Some(labels) = p.labels {
+                            let idx = (p.value.round() as usize).min(labels.len().saturating_sub(1));
+                            labels[idx].to_string()
+                        } else {
+                            format!("{:.2}", p.value)
+                        };
+                        if is_param_sel {
+                            spans.push(Span::styled(
+                                format!("[{}:{}]", p.name, val_str),
+                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                            ));
+                        } else {
+                            spans.push(Span::styled(
+                                format!(" {}:{} ", p.name, val_str),
+                                Style::default().fg(Color::DarkGray),
+                            ));
+                        }
+                    }
+                    use ratatui::text::Text;
+                    let mut text = Text::default();
+                    text.push_line(main_line);
+                    text.push_line(Line::from(spans));
+                    ListItem::new(text)
+                } else {
+                    ListItem::new(main_line)
+                }
             }).collect();
 
-            let hint = if is_selected {
-                "  a:add  d:del  e:toggle  ↑↓:select"
-            } else {
-                ""
-            };
-
             let block = Block::default()
-                .title(format!("{}{}", title, hint))
+                .title(title)
                 .borders(Borders::ALL)
                 .border_style(if is_selected {
                     Style::default().fg(Color::Yellow)
@@ -121,37 +136,6 @@ impl FxGroupPanel {
                 let list = List::new(items).block(block);
                 frame.render_widget(list, group_areas[i]);
             }
-        }
-    }
-
-    fn render_params(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
-        let group = &state.groups[self.selected_group];
-        if let Some(effect) = group.effects.get(self.selected_effect) {
-            let lines: Vec<Line> = effect.params.iter().enumerate().map(|(i, p)| {
-                let bar = param_bar(p.value, p.min, p.max, 20);
-                let is_selected = i == self.selected_param;
-                let style = if is_selected {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
-                let indicator = if is_selected { "►" } else { " " };
-                Line::styled(
-                    format!("{} {:12} {} {:.3}", indicator, p.name, bar, p.value),
-                    style,
-                )
-            }).collect();
-
-            let block = Paragraph::new(lines)
-                .block(Block::default()
-                    .title(format!("Parameters: {}  ([]:select  ←→:adjust)", effect.name))
-                    .borders(Borders::ALL));
-            frame.render_widget(block, area);
-        } else {
-            let p = Paragraph::new("No effect selected — navigate up to a group and press 'a' to add one")
-                .block(Block::default().title("Parameters").borders(Borders::ALL))
-                .style(Style::default().fg(Color::DarkGray));
-            frame.render_widget(p, area);
         }
     }
 
@@ -211,9 +195,3 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(layout[1])[1]
 }
 
-fn param_bar(value: f32, min: f32, max: f32, width: usize) -> String {
-    let range = (max - min).max(0.001);
-    let normalized = ((value - min) / range).clamp(0.0, 1.0);
-    let filled = (normalized * width as f32) as usize;
-    format!("[{}{}]", "█".repeat(filled), "░".repeat(width - filled))
-}

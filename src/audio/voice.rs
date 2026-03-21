@@ -8,6 +8,10 @@ pub struct Voice {
     pub active: bool,
     pub midi_note: u8,
     pub velocity: f32,
+    /// Default note played by spacebar preview / when no UDP note specifies one
+    pub default_midi_note: u8,
+    /// Default velocity for spacebar preview
+    pub default_velocity: f32,
     /// Remaining samples before auto-release
     pub length_remaining: u64,
     /// Send levels to effect groups [0..4]
@@ -24,6 +28,8 @@ impl Voice {
             active: false,
             midi_note: 60,
             velocity: 0.0,
+            default_midi_note: 60,
+            default_velocity: 0.75,
             length_remaining: 0,
             sends,
         }

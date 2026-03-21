@@ -67,7 +67,8 @@ impl Effect for Distortion {
     fn get_parameters(&self) -> Vec<EffectParameter> {
         vec![
             EffectParameter::new("drive", self.drive, 0.0, 1.0),
-            EffectParameter::new("type", self.dist_type as u8 as f32, 0.0, 3.0),
+            EffectParameter::new_enum("type", self.dist_type as u8 as f32,
+                &["HardClip", "SoftClip", "Foldback", "Waveshape"]),
         ]
     }
 

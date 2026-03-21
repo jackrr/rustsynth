@@ -18,15 +18,23 @@ pub struct EffectParameter {
     pub value: f32,
     pub min: f32,
     pub max: f32,
+    /// Named options for enum params. When set, ←→ steps by 1 and the UI shows
+    /// the label instead of the raw number.
+    pub labels: Option<&'static [&'static str]>,
 }
 
 impl EffectParameter {
     pub fn new(name: &str, value: f32, min: f32, max: f32) -> Self {
+        EffectParameter { name: name.to_string(), value, min, max, labels: None }
+    }
+
+    pub fn new_enum(name: &str, value: f32, labels: &'static [&'static str]) -> Self {
         EffectParameter {
             name: name.to_string(),
             value,
-            min,
-            max,
+            min: 0.0,
+            max: (labels.len() - 1) as f32,
+            labels: Some(labels),
         }
     }
 }

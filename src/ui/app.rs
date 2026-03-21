@@ -115,8 +115,11 @@ impl App {
             };
             Line::from(Span::styled(m.tab_label(), style))
         }).collect();
+        let selected_tab = modes.iter().position(|m| *m == self.mode).unwrap_or(0);
         let tabs = Tabs::new(tab_titles)
             .block(Block::default().borders(Borders::ALL))
+            .select(selected_tab)
+            .highlight_style(Style::default())  // span styles already handle highlighting
             .divider("|");
         frame.render_widget(tabs, chunks[1]);
 
@@ -151,7 +154,7 @@ impl App {
                 UIMode::Routing  => "↑↓:Voice  []:Group  ←→:Adjust  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  q:Quit",
             }
         };
-        let p = Paragraph::new(help).style(Style::default().fg(Color::DarkGray));
+        let p = Paragraph::new(help).style(Style::default().fg(Color::White));
         frame.render_widget(p, area);
     }
 
@@ -225,10 +228,11 @@ impl App {
 
     fn handle_voices_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
         if key.code == KeyCode::Char(' ') {
+            let v = &state.voices[self.voice_panel.selected_voice];
             let _ = self.note_tx.try_send(NoteCommand {
                 channel: self.voice_panel.selected_voice,
-                midi_note: 60, // C4
-                velocity: 0.75,
+                midi_note: v.default_midi_note,
+                velocity: v.default_velocity,
                 length_samples: 24000, // ~0.5s at 48kHz
             });
             return;
@@ -300,10 +304,14 @@ impl App {
         let group = &state.groups[panel.selected_group];
         if let Some(effect) = group.effects.get(panel.selected_effect) {
             if let Some(param) = effect.params.get(panel.selected_param) {
-                let range = param.max - param.min;
-                let step = if fine { 0.01 } else { 0.05 };
-                let new_value = (param.value + dir as f32 * step * range)
-                    .clamp(param.min, param.max);
+                let new_value = if param.labels.is_some() {
+                    // Enum param: always step by 1, wrap at boundaries.
+                    (param.value + dir as f32).clamp(param.min, param.max)
+                } else {
+                    let range = param.max - param.min;
+                    let step = if fine { 0.01 } else { 0.05 };
+                    (param.value + dir as f32 * step * range).clamp(param.min, param.max)
+                };
                 let _ = self.config_tx.try_send(ConfigCommand::SetEffectParam {
                     group: panel.selected_group,
                     effect_idx: panel.selected_effect,

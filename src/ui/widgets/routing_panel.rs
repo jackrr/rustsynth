@@ -30,8 +30,6 @@ impl RoutingPanel {
     }
 
     fn render_matrix(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
-        let group_names = ["Group A", "Group B", "Group C", "Group D"];
-
         let header = Row::new(vec![
             Cell::from("Voice"),
             Cell::from(if self.selected_group == 0 { "► Group A" } else { "  Group A" }),

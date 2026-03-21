@@ -1,17 +1,15 @@
-use crate::audio::dsp::{Effect, EffectParameter, create_effect};
+use crate::audio::dsp::{Effect, create_effect};
 use crate::state::messages::EffectType;
 
 pub struct EffectGroup {
-    pub name: String,
     pub effects: Vec<Box<dyn Effect>>,
     pub enabled: bool,
     sample_rate: f32,
 }
 
 impl EffectGroup {
-    pub fn new(name: &str, sample_rate: f32) -> Self {
+    pub fn new(_name: &str, sample_rate: f32) -> Self {
         EffectGroup {
-            name: name.to_string(),
             effects: Vec::new(),
             enabled: true,
             sample_rate,
@@ -47,15 +45,4 @@ impl EffectGroup {
         }
     }
 
-    pub fn get_effect_params(&self, effect_idx: usize) -> Vec<EffectParameter> {
-        if let Some(effect) = self.effects.get(effect_idx) {
-            effect.get_parameters()
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub fn effect_count(&self) -> usize {
-        self.effects.len()
-    }
 }

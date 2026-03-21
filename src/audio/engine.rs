@@ -10,7 +10,7 @@ use crate::state::synth_state::{
     EffectParamState, EffectState, EnvelopeParams, GroupState, SynthState, VoiceState,
 };
 
-const SCOPE_LEN: usize = 512;
+const SCOPE_LEN: usize = 4096;
 
 pub struct AudioEngine {
     voices: [Voice; 16],
@@ -19,7 +19,6 @@ pub struct AudioEngine {
     note_rx: Receiver<NoteCommand>,
     config_rx: Receiver<ConfigCommand>,
     state_publisher: Arc<ArcSwap<SynthState>>,
-    sample_rate: f32,
     frame_count: u64,
     channels: usize,
     scope_buf: Box<[f32; SCOPE_LEN]>,
@@ -48,7 +47,6 @@ impl AudioEngine {
             note_rx,
             config_rx,
             state_publisher,
-            sample_rate,
             frame_count: 0,
             channels: channels.max(1),
             scope_buf: Box::new([0.0; SCOPE_LEN]),
@@ -103,6 +101,16 @@ impl AudioEngine {
                     self.effect_groups[group].enabled = enabled;
                 }
             }
+            ConfigCommand::SetDefaultNote { voice, midi_note } => {
+                if voice < 16 {
+                    self.voices[voice].default_midi_note = midi_note;
+                }
+            }
+            ConfigCommand::SetDefaultVelocity { voice, velocity } => {
+                if voice < 16 {
+                    self.voices[voice].default_velocity = velocity.clamp(0.0, 1.0);
+                }
+            }
         }
     }
 
@@ -112,7 +120,6 @@ impl AudioEngine {
             VoiceState {
                 active: self.voices[i].active,
                 midi_note: self.voices[i].midi_note,
-                velocity: self.voices[i].velocity,
                 amplitude: self.voices[i].amplitude(),
                 osc_type: self.voices[i].oscillator.osc_type,
                 envelope: EnvelopeParams {
@@ -121,6 +128,8 @@ impl AudioEngine {
                     sustain: env.sustain_level,
                     release: env.release_time,
                 },
+                default_midi_note: self.voices[i].default_midi_note,
+                default_velocity: self.voices[i].default_velocity,
             }
         });
 
@@ -134,6 +143,7 @@ impl AudioEngine {
                         value: p.value,
                         min: p.min,
                         max: p.max,
+                        labels: p.labels,
                     }).collect(),
                 }
             }).collect();
@@ -157,7 +167,6 @@ impl AudioEngine {
             voices,
             groups,
             routing,
-            sample_rate: self.sample_rate,
             scope,
         });
 

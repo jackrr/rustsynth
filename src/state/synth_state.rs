@@ -20,10 +20,11 @@ impl Default for EnvelopeParams {
 pub struct VoiceState {
     pub active: bool,
     pub midi_note: u8,
-    pub velocity: f32,
     pub amplitude: f32,
     pub osc_type: OscillatorType,
     pub envelope: EnvelopeParams,
+    pub default_midi_note: u8,
+    pub default_velocity: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -32,6 +33,7 @@ pub struct EffectParamState {
     pub value: f32,
     pub min: f32,
     pub max: f32,
+    pub labels: Option<&'static [&'static str]>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +53,6 @@ pub struct SynthState {
     pub voices: [VoiceState; 16],
     pub groups: [GroupState; 4],
     pub routing: [[f32; 4]; 16],
-    pub sample_rate: f32,
     /// Recent output samples for oscilloscope display (oldest → newest)
     pub scope: Vec<f32>,
 }
@@ -61,10 +62,11 @@ impl Default for VoiceState {
         VoiceState {
             active: false,
             midi_note: 60,
-            velocity: 0.0,
             amplitude: 0.0,
             osc_type: OscillatorType::Sine,
             envelope: EnvelopeParams::default(),
+            default_midi_note: 60,
+            default_velocity: 0.75,
         }
     }
 }
@@ -81,8 +83,7 @@ impl Default for SynthState {
             voices: std::array::from_fn(|_| VoiceState::default()),
             groups: std::array::from_fn(|_| GroupState::default()),
             routing: [[0.0; 4]; 16],
-            sample_rate: 48000.0,
-            scope: vec![0.0; 512],
+            scope: vec![0.0; 4096],
         }
     }
 }
