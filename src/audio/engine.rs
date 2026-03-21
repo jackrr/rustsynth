@@ -10,6 +10,8 @@ use crate::state::synth_state::{
     EffectParamState, EffectState, EnvelopeParams, GroupState, SynthState, VoiceState,
 };
 
+const SCOPE_LEN: usize = 512;
+
 pub struct AudioEngine {
     voices: [Voice; 16],
     effect_groups: [EffectGroup; 4],
@@ -19,11 +21,15 @@ pub struct AudioEngine {
     state_publisher: Arc<ArcSwap<SynthState>>,
     sample_rate: f32,
     frame_count: u64,
+    channels: usize,
+    scope_buf: Box<[f32; SCOPE_LEN]>,
+    scope_idx: usize,
 }
 
 impl AudioEngine {
     pub fn new(
         sample_rate: f32,
+        channels: usize,
         note_rx: Receiver<NoteCommand>,
         config_rx: Receiver<ConfigCommand>,
         state_publisher: Arc<ArcSwap<SynthState>>,
@@ -44,6 +50,9 @@ impl AudioEngine {
             state_publisher,
             sample_rate,
             frame_count: 0,
+            channels: channels.max(1),
+            scope_buf: Box::new([0.0; SCOPE_LEN]),
+            scope_idx: 0,
         }
     }
 
@@ -138,11 +147,18 @@ impl AudioEngine {
             std::array::from_fn(|g| self.routing.get(v, g))
         });
 
+        // Build ordered scope slice (oldest → newest) from ring buffer
+        let mut scope = vec![0.0f32; SCOPE_LEN];
+        let idx = self.scope_idx;
+        scope[..SCOPE_LEN - idx].copy_from_slice(&self.scope_buf[idx..]);
+        scope[SCOPE_LEN - idx..].copy_from_slice(&self.scope_buf[..idx]);
+
         let snapshot = Arc::new(SynthState {
             voices,
             groups,
             routing,
             sample_rate: self.sample_rate,
+            scope,
         });
 
         self.state_publisher.store(snapshot);
@@ -158,6 +174,7 @@ impl AudioEngine {
             self.apply_config_change(config);
         }
 
+        let mut ch_counter = 0usize;
         for sample in output.iter_mut() {
             // Initialize group inputs
             let mut group_inputs = [0.0_f32; 4];
@@ -177,7 +194,16 @@ impl AudioEngine {
                 final_mix += group.process(input);
             }
 
-            *sample = (final_mix * 0.25).clamp(-1.0, 1.0);
+            let out = (final_mix * 0.25).clamp(-1.0, 1.0);
+            *sample = out;
+
+            // Capture pre-gain signal so scope shows full amplitude range
+            if ch_counter == 0 {
+                self.scope_buf[self.scope_idx] = final_mix.clamp(-1.0, 1.0);
+                self.scope_idx = (self.scope_idx + 1) % SCOPE_LEN;
+            }
+            ch_counter = (ch_counter + 1) % self.channels;
+
             self.frame_count += 1;
         }
 

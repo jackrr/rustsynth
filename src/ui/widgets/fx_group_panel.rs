@@ -144,7 +144,7 @@ impl FxGroupPanel {
 
             let block = Paragraph::new(lines)
                 .block(Block::default()
-                    .title(format!("Parameters: {}  (←→:adjust  ↑↓:param)", effect.name))
+                    .title(format!("Parameters: {}  ([]:select  ←→:adjust)", effect.name))
                     .borders(Borders::ALL));
             frame.render_widget(block, area);
         } else {

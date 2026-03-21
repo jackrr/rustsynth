@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use arc_swap::ArcSwap;
 use crossbeam_channel::Sender;
-use crossterm::event::{self, Event, KeyCode};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
     Frame, Terminal,
     layout::{Constraint, Direction, Layout},
@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
-use crate::state::messages::ConfigCommand;
+use crate::state::messages::{ConfigCommand, NoteCommand};
 use crate::state::synth_state::SynthState;
 use crate::udp::server::UdpStatus;
 use crate::ui::mode::UIMode;
@@ -29,6 +29,7 @@ pub struct App {
     routing_panel: RoutingPanel,
     state: Arc<ArcSwap<SynthState>>,
     config_tx: Sender<ConfigCommand>,
+    note_tx: Sender<NoteCommand>,
     udp_status: Arc<Mutex<UdpStatus>>,
     running: bool,
 }
@@ -37,6 +38,7 @@ impl App {
     pub fn new(
         state: Arc<ArcSwap<SynthState>>,
         config_tx: Sender<ConfigCommand>,
+        note_tx: Sender<NoteCommand>,
         udp_status: Arc<Mutex<UdpStatus>>,
     ) -> Self {
         App {
@@ -46,6 +48,7 @@ impl App {
             routing_panel: RoutingPanel::new(),
             state,
             config_tx,
+            note_tx,
             udp_status,
             running: true,
         }
@@ -144,7 +147,7 @@ impl App {
         } else {
             match self.mode {
                 UIMode::Voices   => self.voice_panel.help_text(),
-                UIMode::FxGroups => "↑↓:Select effect  ←→:Adjust param  a:Add  d:Delete  e:Toggle  Tab:Mode  q:Quit",
+                UIMode::FxGroups => "↑↓:Select effect  []:Select param  ←→:Adjust param  a:Add  d:Delete  e:Toggle  Tab:Mode  q:Quit",
                 UIMode::Routing  => "↑↓:Voice  []:Group  ←→:Adjust  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  q:Quit",
             }
         };
@@ -221,6 +224,15 @@ impl App {
     }
 
     fn handle_voices_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
+        if key.code == KeyCode::Char(' ') {
+            let _ = self.note_tx.try_send(NoteCommand {
+                channel: self.voice_panel.selected_voice,
+                midi_note: 60, // C4
+                velocity: 0.75,
+                length_samples: 24000, // ~0.5s at 48kHz
+            });
+            return;
+        }
         for cmd in self.voice_panel.handle_key(key, state) {
             let _ = self.config_tx.try_send(cmd);
         }
@@ -246,10 +258,12 @@ impl App {
                     panel.selected_effect = 0;
                 }
             }
-            KeyCode::Left => {
+            KeyCode::Left  => self.adjust_fx_param(state, -1, key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::Right => self.adjust_fx_param(state,  1, key.modifiers.contains(KeyModifiers::SHIFT)),
+            KeyCode::Char('[') => {
                 if panel.selected_param > 0 { panel.selected_param -= 1; }
             }
-            KeyCode::Right => {
+            KeyCode::Char(']') => {
                 let param_count = state.groups[panel.selected_group]
                     .effects.get(panel.selected_effect)
                     .map(|e| e.params.len()).unwrap_or(0);
@@ -277,18 +291,18 @@ impl App {
                     panel.selected_param = 0;
                 }
             }
-            KeyCode::Char('+') | KeyCode::Char('=') => self.adjust_fx_param(state,  0.05),
-            KeyCode::Char('-')                       => self.adjust_fx_param(state, -0.05),
             _ => {}
         }
     }
 
-    fn adjust_fx_param(&self, state: &SynthState, delta: f32) {
+    fn adjust_fx_param(&self, state: &SynthState, dir: i32, fine: bool) {
         let panel = &self.fx_panel;
         let group = &state.groups[panel.selected_group];
         if let Some(effect) = group.effects.get(panel.selected_effect) {
             if let Some(param) = effect.params.get(panel.selected_param) {
-                let new_value = (param.value + delta * (param.max - param.min))
+                let range = param.max - param.min;
+                let step = if fine { 0.01 } else { 0.05 };
+                let new_value = (param.value + dir as f32 * step * range)
                     .clamp(param.min, param.max);
                 let _ = self.config_tx.try_send(ConfigCommand::SetEffectParam {
                     group: panel.selected_group,
@@ -310,19 +324,21 @@ impl App {
             KeyCode::Char('[') => { panel.selected_group = panel.selected_group.checked_sub(1).unwrap_or(3); }
 
             KeyCode::Left => {
+                let step = if key.modifiers.contains(KeyModifiers::SHIFT) { 0.01 } else { 0.1 };
                 let cur = state.routing[panel.selected_voice][panel.selected_group];
                 let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
                     voice: panel.selected_voice,
                     group: panel.selected_group,
-                    level: (cur - 0.05).clamp(0.0, 1.0),
+                    level: (cur - step).clamp(0.0, 1.0),
                 });
             }
             KeyCode::Right => {
+                let step = if key.modifiers.contains(KeyModifiers::SHIFT) { 0.01 } else { 0.1 };
                 let cur = state.routing[panel.selected_voice][panel.selected_group];
                 let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
                     voice: panel.selected_voice,
                     group: panel.selected_group,
-                    level: (cur + 0.05).clamp(0.0, 1.0),
+                    level: (cur + step).clamp(0.0, 1.0),
                 });
             }
             KeyCode::Enter => {

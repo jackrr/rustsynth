@@ -56,7 +56,8 @@ fn main() -> anyhow::Result<()> {
         buffer_size: cpal::BufferSize::Default,
     };
 
-    let mut engine = AudioEngine::new(sample_rate, note_rx, config_rx, state_for_audio);
+    let channels = stream_config.channels as usize;
+    let mut engine = AudioEngine::new(sample_rate, channels, note_rx, config_rx, state_for_audio);
 
     let stream = device.build_output_stream(
         &stream_config,
@@ -76,7 +77,7 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(state_for_tui, config_tx, udp_status_for_app);
+    let mut app = App::new(state_for_tui, config_tx, note_tx, udp_status_for_app);
     let result = app.run(&mut terminal);
 
     disable_raw_mode()?;

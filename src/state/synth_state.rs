@@ -52,6 +52,8 @@ pub struct SynthState {
     pub groups: [GroupState; 4],
     pub routing: [[f32; 4]; 16],
     pub sample_rate: f32,
+    /// Recent output samples for oscilloscope display (oldest → newest)
+    pub scope: Vec<f32>,
 }
 
 impl Default for VoiceState {
@@ -80,6 +82,7 @@ impl Default for SynthState {
             groups: std::array::from_fn(|_| GroupState::default()),
             routing: [[0.0; 4]; 16],
             sample_rate: 48000.0,
+            scope: vec![0.0; 512],
         }
     }
 }
