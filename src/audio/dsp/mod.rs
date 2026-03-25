@@ -21,11 +21,18 @@ pub struct EffectParameter {
     /// Named options for enum params. When set, ←→ steps by 1 and the UI shows
     /// the label instead of the raw number.
     pub labels: Option<&'static [&'static str]>,
+    /// When true, ←→ uses multiplicative (semitone-interval) stepping instead of
+    /// linear percentage-of-range steps. Use for frequency params.
+    pub logarithmic: bool,
 }
 
 impl EffectParameter {
     pub fn new(name: &str, value: f32, min: f32, max: f32) -> Self {
-        EffectParameter { name: name.to_string(), value, min, max, labels: None }
+        EffectParameter { name: name.to_string(), value, min, max, labels: None, logarithmic: false }
+    }
+
+    pub fn new_log(name: &str, value: f32, min: f32, max: f32) -> Self {
+        EffectParameter { name: name.to_string(), value, min, max, labels: None, logarithmic: true }
     }
 
     pub fn new_enum(name: &str, value: f32, labels: &'static [&'static str]) -> Self {
@@ -35,6 +42,7 @@ impl EffectParameter {
             min: 0.0,
             max: (labels.len() - 1) as f32,
             labels: Some(labels),
+            logarithmic: false,
         }
     }
 }

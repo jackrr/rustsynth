@@ -101,6 +101,11 @@ impl AudioEngine {
                     self.effect_groups[group].enabled = enabled;
                 }
             }
+            ConfigCommand::ClearGroup { group } => {
+                if group < 4 {
+                    self.effect_groups[group].clear();
+                }
+            }
             ConfigCommand::SetDefaultNote { voice, midi_note } => {
                 if voice < 16 {
                     self.voices[voice].default_midi_note = midi_note;
@@ -135,8 +140,9 @@ impl AudioEngine {
 
         let groups: [GroupState; 4] = std::array::from_fn(|i| {
             let group = &self.effect_groups[i];
-            let effects: Vec<EffectState> = group.effects.iter().map(|e| {
+            let effects: Vec<EffectState> = group.effects.iter().map(|(et, e)| {
                 EffectState {
+                    effect_type: *et,
                     name: e.name().to_string(),
                     params: e.get_parameters().into_iter().map(|p| EffectParamState {
                         name: p.name,
@@ -144,6 +150,7 @@ impl AudioEngine {
                         min: p.min,
                         max: p.max,
                         labels: p.labels,
+                        logarithmic: p.logarithmic,
                     }).collect(),
                 }
             }).collect();

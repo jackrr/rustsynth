@@ -122,7 +122,7 @@ impl Effect for BiquadFilter {
 
     fn get_parameters(&self) -> Vec<EffectParameter> {
         vec![
-            EffectParameter::new("cutoff", self.cutoff, 20.0, 20000.0),
+            EffectParameter::new_log("cutoff", self.cutoff, 20.0, 20000.0),
             EffectParameter::new("resonance", self.resonance, 0.1, 20.0),
         ]
     }
@@ -196,9 +196,9 @@ impl Effect for Eq3 {
             EffectParameter::new("low_gain", self.low_gain, 0.0, 4.0),
             EffectParameter::new("mid_gain", self.mid_gain, 0.0, 4.0),
             EffectParameter::new("high_gain", self.high_gain, 0.0, 4.0),
-            EffectParameter::new("low_freq", self.low.cutoff, 20.0, 1000.0),
-            EffectParameter::new("mid_freq", self.mid.cutoff, 200.0, 8000.0),
-            EffectParameter::new("high_freq", self.high.cutoff, 1000.0, 20000.0),
+            EffectParameter::new_log("low_freq", self.low.cutoff, 20.0, 1000.0),
+            EffectParameter::new_log("mid_freq", self.mid.cutoff, 200.0, 8000.0),
+            EffectParameter::new_log("high_freq", self.high.cutoff, 1000.0, 20000.0),
         ]
     }
 

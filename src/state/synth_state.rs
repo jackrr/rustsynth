@@ -1,4 +1,4 @@
-use crate::state::messages::OscillatorType;
+use crate::state::messages::{EffectType, OscillatorType};
 
 /// ADSR envelope parameters (carried in state snapshot so TUI can display/edit them)
 #[derive(Debug, Clone)]
@@ -34,10 +34,12 @@ pub struct EffectParamState {
     pub min: f32,
     pub max: f32,
     pub labels: Option<&'static [&'static str]>,
+    pub logarithmic: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct EffectState {
+    pub effect_type: EffectType,
     pub name: String,
     pub params: Vec<EffectParamState>,
 }

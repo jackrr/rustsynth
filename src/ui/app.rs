@@ -12,6 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Tabs},
 };
 
+use crate::preset;
 use crate::state::messages::{ConfigCommand, NoteCommand};
 use crate::state::synth_state::SynthState;
 use crate::udp::server::UdpStatus;
@@ -19,7 +20,7 @@ use crate::ui::mode::UIMode;
 use crate::ui::widgets::{
     fx_group_panel::FxGroupPanel,
     routing_panel::RoutingPanel,
-    voice_panel::{VoiceEditSection, VoicePanel},
+    voice_panel::VoicePanel,
 };
 
 pub struct App {
@@ -32,6 +33,7 @@ pub struct App {
     note_tx: Sender<NoteCommand>,
     udp_status: Arc<Mutex<UdpStatus>>,
     running: bool,
+    status_msg: Option<(String, Instant)>,
 }
 
 impl App {
@@ -51,6 +53,7 @@ impl App {
             note_tx,
             udp_status,
             running: true,
+            status_msg: None,
         }
     }
 
@@ -60,6 +63,13 @@ impl App {
         while self.running {
             let frame_start = Instant::now();
             let state = self.state.load_full();
+
+            // Expire status message after 2 seconds
+            if let Some((_, ts)) = self.status_msg {
+                if ts.elapsed() > Duration::from_secs(2) {
+                    self.status_msg = None;
+                }
+            }
 
             terminal.draw(|f| self.render(f, &state))?;
 
@@ -145,13 +155,20 @@ impl App {
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
+        // Show timed status message if active
+        if let Some((ref msg, _)) = self.status_msg {
+            let p = Paragraph::new(msg.as_str()).style(Style::default().fg(Color::Yellow));
+            frame.render_widget(p, area);
+            return;
+        }
+
         let help = if self.mode == UIMode::FxGroups && self.fx_panel.show_picker {
             "↑↓:Select effect  Enter:Add  Esc:Cancel"
         } else {
             match self.mode {
                 UIMode::Voices   => self.voice_panel.help_text(),
-                UIMode::FxGroups => "↑↓:Select effect  []:Select param  ←→:Adjust param  a:Add  d:Delete  e:Toggle  Tab:Mode  q:Quit",
-                UIMode::Routing  => "↑↓:Voice  []:Group  ←→:Adjust  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  q:Quit",
+                UIMode::FxGroups => "↑↓:Select effect  Tab/[]:Select param  ←→:Adjust param  a:Add  d:Delete  e:Toggle  1/2/3:Page  q:Quit",
+                UIMode::Routing  => "↑↓:Voice  Tab/[]:Group  ←→:Adjust  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  1/2/3:Page  q:Quit",
             }
         };
         let p = Paragraph::new(help).style(Style::default().fg(Color::White));
@@ -170,25 +187,39 @@ impl App {
             return;
         }
 
-        let voices_in_grid = self.mode == UIMode::Voices
-            && self.voice_panel.edit_section == VoiceEditSection::Grid;
-        let tab_switches_mode = self.mode != UIMode::Voices || voices_in_grid;
+        let preset_path = std::path::Path::new("preset.json");
 
-        if key.code == KeyCode::Tab && tab_switches_mode {
-            self.mode = match self.mode {
-                UIMode::Voices   => UIMode::FxGroups,
-                UIMode::FxGroups => UIMode::Routing,
-                UIMode::Routing  => UIMode::Voices,
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+            let msg = match preset::save(&state, preset_path) {
+                Ok(()) => format!("Saved preset to {}", preset_path.display()),
+                Err(e) => format!("Save failed: {e}"),
             };
+            self.status_msg = Some((msg, Instant::now()));
             return;
         }
 
+        if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
+            let msg = match preset::load(preset_path) {
+                Ok(cmds) => {
+                    for cmd in cmds {
+                        let _ = self.config_tx.try_send(cmd);
+                    }
+                    format!("Loaded preset from {}", preset_path.display())
+                }
+                Err(e) => format!("Load failed: {e}"),
+            };
+            self.status_msg = Some((msg, Instant::now()));
+            return;
+        }
+
+        // 1/2/3 always switch pages
         match key.code {
-            KeyCode::Char('1') if tab_switches_mode => { self.mode = UIMode::Voices; return; }
-            KeyCode::Char('2') if tab_switches_mode => { self.mode = UIMode::FxGroups; return; }
-            KeyCode::Char('3') if tab_switches_mode => { self.mode = UIMode::Routing; return; }
+            KeyCode::Char('1') => { self.mode = UIMode::Voices; return; }
+            KeyCode::Char('2') => { self.mode = UIMode::FxGroups; return; }
+            KeyCode::Char('3') => { self.mode = UIMode::Routing; return; }
             _ => {}
         }
+
 
         match self.mode {
             UIMode::Voices   => self.handle_voices_key(key, state),
@@ -285,6 +316,14 @@ impl App {
                 panel.show_picker = true;
                 panel.picker_selection = 0;
             }
+            KeyCode::Tab => {
+                let param_count = state.groups[panel.selected_group]
+                    .effects.get(panel.selected_effect)
+                    .map(|e| e.params.len()).unwrap_or(0);
+                if param_count > 0 {
+                    panel.selected_param = (panel.selected_param + 1) % param_count;
+                }
+            }
             KeyCode::Char('d') => {
                 if !state.groups[panel.selected_group].effects.is_empty() {
                     let _ = self.config_tx.try_send(ConfigCommand::RemoveEffect {
@@ -307,6 +346,13 @@ impl App {
                 let new_value = if param.labels.is_some() {
                     // Enum param: always step by 1, wrap at boundaries.
                     (param.value + dir as f32).clamp(param.min, param.max)
+                } else if param.logarithmic {
+                    // Logarithmic param (frequency): multiply by a semitone-based factor.
+                    // Coarse = 2 semitones, fine = 1 semitone per press.
+                    let semitones: f32 = if fine { 1.0 } else { 2.0 };
+                    let factor = (2.0_f32).powf(semitones / 12.0);
+                    let factor = if dir > 0 { factor } else { 1.0 / factor };
+                    (param.value * factor).clamp(param.min, param.max)
                 } else {
                     let range = param.max - param.min;
                     let step = if fine { 0.01 } else { 0.05 };
@@ -327,6 +373,7 @@ impl App {
         match key.code {
             KeyCode::Up   => { panel.selected_voice = panel.selected_voice.saturating_sub(1); }
             KeyCode::Down => { panel.selected_voice = (panel.selected_voice + 1).min(15); }
+            KeyCode::Tab  => { panel.selected_group = (panel.selected_group + 1) % 4; }
 
             KeyCode::Char(']') => { panel.selected_group = (panel.selected_group + 1) % 4; }
             KeyCode::Char('[') => { panel.selected_group = panel.selected_group.checked_sub(1).unwrap_or(3); }

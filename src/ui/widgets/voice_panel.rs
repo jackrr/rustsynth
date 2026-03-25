@@ -217,9 +217,9 @@ impl VoicePanel {
     pub fn help_text(&self) -> &str {
         match self.edit_section {
             VoiceEditSection::Grid =>
-                "↑↓←→:Navigate  Space:Trigger C4  Enter:Edit  o:Cycle osc  c:Copy voice  p:Paste voice  Tab:Mode  q:Quit",
+                "↑↓←→:Navigate  Tab:Next voice  Space:Trigger  Enter:Edit  o:Cycle osc  c:Copy  p:Paste  q:Quit",
             VoiceEditSection::Oscillator =>
-                "↑↓:Field  ←→:Adjust  (Wave: cycle type  Note: semitone/octave  Vel: ±5%)  Shift:fine  Tab:Next  Esc:Grid",
+                "↑↓:Field  ←→:Adjust  (Wave: cycle type  Note: semitone/octave  Vel: ±5%)  Shift:fine  Tab:Next section  Esc:Grid",
             VoiceEditSection::Envelope =>
                 "↑↓:Select param  ←→:Adjust value  Tab:Next section  Esc:Back to grid  q:Quit",
             VoiceEditSection::Sends =>
@@ -238,6 +238,8 @@ impl VoicePanel {
                 KeyCode::Down  => { self.move_grid( 1,  0); vec![] }
                 KeyCode::Left  => { self.move_grid( 0, -1); vec![] }
                 KeyCode::Right => { self.move_grid( 0,  1); vec![] }
+                KeyCode::Tab   => { self.selected_voice = (self.selected_voice + 1) % 16; vec![] }
+                KeyCode::BackTab => { self.selected_voice = self.selected_voice.checked_sub(1).unwrap_or(15); vec![] }
                 KeyCode::Enter => { self.edit_section = VoiceEditSection::Oscillator; vec![] }
                 KeyCode::Char('o') => self.cycle_osc(state, 1).into_iter().collect(),
                 KeyCode::Char('c') => { self.copy_voice(state); vec![] }

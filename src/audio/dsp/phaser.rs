@@ -94,7 +94,7 @@ impl Effect for Phaser {
         vec![
             EffectParameter::new("rate", self.rate, 0.01, 10.0),
             EffectParameter::new("depth", self.depth, 0.0, 2.0),
-            EffectParameter::new("base_freq", self.base_freq, 100.0, 8000.0),
+            EffectParameter::new_log("base_freq", self.base_freq, 100.0, 8000.0),
             EffectParameter::new("feedback", self.feedback, 0.0, 0.95),
             EffectParameter::new("mix", self.mix, 0.0, 1.0),
         ]

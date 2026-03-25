@@ -10,6 +10,7 @@ pub struct NoteCommand {
 /// Configuration changes sent from TUI to audio thread
 #[derive(Debug, Clone)]
 pub enum ConfigCommand {
+    ClearGroup { group: usize },
     SetOscillator { voice: usize, osc_type: OscillatorType },
     SetDefaultNote { voice: usize, midi_note: u8 },
     SetDefaultVelocity { voice: usize, velocity: f32 },
@@ -21,7 +22,7 @@ pub enum ConfigCommand {
     EnableGroup { group: usize, enabled: bool },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum OscillatorType {
     Sine,
     Triangle,
@@ -85,7 +86,7 @@ impl OscillatorType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum EffectType {
     Gain,
     Bitcrusher,
