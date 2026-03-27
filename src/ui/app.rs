@@ -167,7 +167,7 @@ impl App {
         } else {
             match self.mode {
                 UIMode::Voices   => self.voice_panel.help_text(),
-                UIMode::FxGroups => "↑↓:Select effect  Tab/[]:Select param  ←→:Adjust param  a:Add  d:Delete  e:Toggle  1/2/3:Page  q:Quit",
+                UIMode::FxGroups => "↑↓:Navigate effects  Enter:Edit params  a:Add effect  d:Delete  e:Toggle group  1/2/3:Page  q:Quit",
                 UIMode::Routing  => "↑↓:Voice  Tab/[]:Group  ←→:Adjust  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  1/2/3:Page  q:Quit",
             }
         };
@@ -235,7 +235,7 @@ impl App {
                 panel.picker_selection = panel.picker_selection.saturating_sub(1);
             }
             KeyCode::Down => {
-                panel.picker_selection = (panel.picker_selection + 1).min(14); // 15 effects
+                panel.picker_selection = (panel.picker_selection + 1).min(15); // 16 effects
             }
             KeyCode::Enter => {
                 let effect_type = panel.picker_selected_effect();
@@ -275,6 +275,29 @@ impl App {
 
     fn handle_fx_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
         let panel = &mut self.fx_panel;
+
+        if panel.editing {
+            match key.code {
+                KeyCode::Up => {
+                    if panel.selected_param > 0 { panel.selected_param -= 1; }
+                }
+                KeyCode::Down => {
+                    let param_count = state.groups[panel.selected_group]
+                        .effects.get(panel.selected_effect)
+                        .map(|e| e.params.len()).unwrap_or(0);
+                    if panel.selected_param + 1 < param_count {
+                        panel.selected_param += 1;
+                    }
+                }
+                KeyCode::Left  => self.adjust_fx_param(state, -1, key.modifiers.contains(KeyModifiers::SHIFT)),
+                KeyCode::Right => self.adjust_fx_param(state,  1, key.modifiers.contains(KeyModifiers::SHIFT)),
+                KeyCode::Enter | KeyCode::Esc => { self.fx_panel.editing = false; }
+                _ => {}
+            }
+            return;
+        }
+
+        // Navigate mode
         match key.code {
             KeyCode::Up => {
                 if panel.selected_effect > 0 {
@@ -293,17 +316,13 @@ impl App {
                     panel.selected_effect = 0;
                 }
             }
-            KeyCode::Left  => self.adjust_fx_param(state, -1, key.modifiers.contains(KeyModifiers::SHIFT)),
-            KeyCode::Right => self.adjust_fx_param(state,  1, key.modifiers.contains(KeyModifiers::SHIFT)),
-            KeyCode::Char('[') => {
-                if panel.selected_param > 0 { panel.selected_param -= 1; }
-            }
-            KeyCode::Char(']') => {
-                let param_count = state.groups[panel.selected_group]
+            KeyCode::Enter => {
+                let has_params = state.groups[panel.selected_group]
                     .effects.get(panel.selected_effect)
-                    .map(|e| e.params.len()).unwrap_or(0);
-                if panel.selected_param + 1 < param_count {
-                    panel.selected_param += 1;
+                    .map(|e| !e.params.is_empty()).unwrap_or(false);
+                if has_params {
+                    panel.editing = true;
+                    panel.selected_param = 0;
                 }
             }
             KeyCode::Char('e') => {
@@ -315,14 +334,6 @@ impl App {
             KeyCode::Char('a') => {
                 panel.show_picker = true;
                 panel.picker_selection = 0;
-            }
-            KeyCode::Tab => {
-                let param_count = state.groups[panel.selected_group]
-                    .effects.get(panel.selected_effect)
-                    .map(|e| e.params.len()).unwrap_or(0);
-                if param_count > 0 {
-                    panel.selected_param = (panel.selected_param + 1) % param_count;
-                }
             }
             KeyCode::Char('d') => {
                 if !state.groups[panel.selected_group].effects.is_empty() {

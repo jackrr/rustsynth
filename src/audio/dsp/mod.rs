@@ -9,6 +9,7 @@ pub mod chorus;
 pub mod phaser;
 pub mod filters;
 pub mod compressor;
+pub mod noise;
 
 use crate::state::messages::EffectType;
 
@@ -72,5 +73,6 @@ pub fn create_effect(effect_type: EffectType, sample_rate: f32) -> Box<dyn Effec
         EffectType::Bandpass => Box::new(filters::BiquadFilter::bandpass(sample_rate)),
         EffectType::Eq3 => Box::new(filters::Eq3::new(sample_rate)),
         EffectType::Compressor => Box::new(compressor::Compressor::new(sample_rate)),
+        EffectType::WhiteNoise => Box::new(noise::WhiteNoise::new(sample_rate)),
     }
 }

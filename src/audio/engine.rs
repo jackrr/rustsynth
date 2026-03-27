@@ -116,6 +116,11 @@ impl AudioEngine {
                     self.voices[voice].default_velocity = velocity.clamp(0.0, 1.0);
                 }
             }
+            ConfigCommand::SetSubOsc { voice, enabled, octave, level } => {
+                if voice < 16 {
+                    self.voices[voice].set_sub_osc(enabled, octave, level);
+                }
+            }
         }
     }
 
@@ -135,6 +140,9 @@ impl AudioEngine {
                 },
                 default_midi_note: self.voices[i].default_midi_note,
                 default_velocity: self.voices[i].default_velocity,
+                sub_osc_enabled: self.voices[i].sub_osc_enabled,
+                sub_osc_octave: self.voices[i].sub_osc_octave,
+                sub_osc_level: self.voices[i].sub_osc_level,
             }
         });
 

@@ -16,6 +16,11 @@ pub struct Voice {
     pub length_remaining: u64,
     /// Send levels to effect groups [0..4]
     pub sends: [f32; 4],
+    /// Sub-oscillator (always sine, tracks main pitch at an octave offset)
+    pub sub_osc: Oscillator,
+    pub sub_osc_enabled: bool,
+    pub sub_osc_octave: i32,   // -2 to +2 octaves relative to main
+    pub sub_osc_level: f32,    // 0.0–1.0 mix into main signal
 }
 
 impl Voice {
@@ -32,6 +37,10 @@ impl Voice {
             default_velocity: 0.75,
             length_remaining: 0,
             sends,
+            sub_osc: Oscillator::new(sample_rate),
+            sub_osc_enabled: false,
+            sub_osc_octave: -1,
+            sub_osc_level: 0.5,
         }
     }
 
@@ -39,10 +48,21 @@ impl Voice {
         self.midi_note = cmd.midi_note;
         self.velocity = cmd.velocity;
         self.length_remaining = cmd.length_samples;
-        self.oscillator.set_frequency(midi_to_freq(cmd.midi_note));
+        let freq = midi_to_freq(cmd.midi_note);
+        self.oscillator.set_frequency(freq);
         self.oscillator.reset();
+        self.sub_osc.set_frequency(freq * 2f32.powi(self.sub_osc_octave));
+        self.sub_osc.reset();
         self.envelope.note_on();
         self.active = true;
+    }
+
+    pub fn set_sub_osc(&mut self, enabled: bool, octave: i32, level: f32) {
+        self.sub_osc_enabled = enabled;
+        self.sub_osc_octave = octave.clamp(-2, 2);
+        self.sub_osc_level = level.clamp(0.0, 1.0);
+        // Sync sub-osc frequency to current note
+        self.sub_osc.set_frequency(midi_to_freq(self.midi_note) * 2f32.powi(self.sub_osc_octave));
     }
 
     pub fn note_off(&mut self) {
@@ -69,6 +89,11 @@ impl Voice {
         }
 
         let osc_sample = self.oscillator.next_sample();
+        let sub_sample = if self.sub_osc_enabled {
+            self.sub_osc.next_sample() * self.sub_osc_level
+        } else {
+            0.0
+        };
         let env_level = self.envelope.next_sample();
 
         // Mark inactive once envelope finishes
@@ -76,7 +101,7 @@ impl Voice {
             self.active = false;
         }
 
-        osc_sample * env_level * self.velocity
+        (osc_sample + sub_sample) * env_level * self.velocity
     }
 
     pub fn amplitude(&self) -> f32 {

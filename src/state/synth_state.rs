@@ -25,6 +25,9 @@ pub struct VoiceState {
     pub envelope: EnvelopeParams,
     pub default_midi_note: u8,
     pub default_velocity: f32,
+    pub sub_osc_enabled: bool,
+    pub sub_osc_octave: i32,
+    pub sub_osc_level: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +72,9 @@ impl Default for VoiceState {
             envelope: EnvelopeParams::default(),
             default_midi_note: 60,
             default_velocity: 0.75,
+            sub_osc_enabled: false,
+            sub_osc_octave: -1,
+            sub_osc_level: 0.5,
         }
     }
 }

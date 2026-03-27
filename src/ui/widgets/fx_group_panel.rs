@@ -2,7 +2,7 @@ use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
-    text::{Line, Span},
+    text::Line,
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
@@ -25,6 +25,7 @@ const ALL_EFFECTS: &[EffectType] = &[
     EffectType::Bandpass,
     EffectType::Eq3,
     EffectType::Compressor,
+    EffectType::WhiteNoise,
 ];
 
 pub struct FxGroupPanel {
@@ -33,6 +34,8 @@ pub struct FxGroupPanel {
     pub selected_param: usize,
     pub show_picker: bool,
     pub picker_selection: usize,
+    /// Whether we're in param-edit mode (Enter toggles; ↑↓ picks param, ←→ adjusts)
+    pub editing: bool,
 }
 
 impl FxGroupPanel {
@@ -43,6 +46,7 @@ impl FxGroupPanel {
             selected_param: 0,
             show_picker: false,
             picker_selection: 0,
+            editing: false,
         }
     }
 
@@ -68,7 +72,11 @@ impl FxGroupPanel {
         for (i, group) in state.groups.iter().enumerate() {
             let is_selected = i == self.selected_group;
             let status = if group.enabled { "On" } else { "Off" };
-            let hint = if is_selected { "  ↑↓:effect  []:param  ←→:adjust  a:add  d:del  e:toggle" } else { "" };
+            let hint = if is_selected && self.editing {
+                "  [EDITING — ↑↓:param  ←→:adjust  Enter/Esc:done]"
+            } else if is_selected {
+                "  [↑↓:effect  Enter:edit  a:add  d:del  e:toggle]"
+            } else { "" };
             let title = format!("Group {} [{}]{}", group_names[i], status, hint);
 
             let items: Vec<ListItem> = group.effects.iter().enumerate().map(|(j, e)| {
@@ -85,33 +93,29 @@ impl FxGroupPanel {
                 );
 
                 if is_effect_selected && !e.params.is_empty() {
-                    // Inline param row: [selected:val] others dim
-                    let mut spans = vec![Span::raw("   ")];
-                    for (k, p) in e.params.iter().enumerate() {
-                        if k > 0 { spans.push(Span::raw("  ")); }
-                        let is_param_sel = k == self.selected_param;
-                        let val_str = if let Some(labels) = p.labels {
-                            let idx = (p.value.round() as usize).min(labels.len().saturating_sub(1));
-                            labels[idx].to_string()
-                        } else {
-                            format!("{:.2}", p.value)
-                        };
-                        if is_param_sel {
-                            spans.push(Span::styled(
-                                format!("[{}:{}]", p.name, val_str),
-                                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                            ));
-                        } else {
-                            spans.push(Span::styled(
-                                format!(" {}:{} ", p.name, val_str),
-                                Style::default().fg(Color::DarkGray),
-                            ));
-                        }
-                    }
                     use ratatui::text::Text;
                     let mut text = Text::default();
                     text.push_line(main_line);
-                    text.push_line(Line::from(spans));
+                    for (k, p) in e.params.iter().enumerate() {
+                        let is_param_sel = k == self.selected_param;
+                        let ind = if is_param_sel { "►" } else { " " };
+                        let (bar_str, val_str) = if let Some(labels) = p.labels {
+                            let idx = (p.value.round() as usize).min(labels.len().saturating_sub(1));
+                            let label = labels[idx];
+                            (format!("◄{:^10}►", label), format!("({}/{})", idx + 1, labels.len()))
+                        } else {
+                            (param_slider(p.value, p.min, p.max, 14), format_param_value(p.value, p.min, p.max))
+                        };
+                        let style = if is_param_sel {
+                            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::DarkGray)
+                        };
+                        text.push_line(Line::styled(
+                            format!("  {} {:<12} {} {}", ind, p.name, bar_str, val_str),
+                            style,
+                        ));
+                    }
                     ListItem::new(text)
                 } else {
                     ListItem::new(main_line)
@@ -171,6 +175,30 @@ impl FxGroupPanel {
     /// Returns the effect type the picker currently has selected (for use when Enter is pressed)
     pub fn picker_selected_effect(&self) -> EffectType {
         ALL_EFFECTS[self.picker_selection.min(ALL_EFFECTS.len() - 1)]
+    }
+}
+
+/// Render a horizontal slider bar for a float param: [━━━━●──────────]
+fn param_slider(value: f32, min: f32, max: f32, width: usize) -> String {
+    let range = (max - min).max(0.001);
+    let pos = (((value - min) / range).clamp(0.0, 1.0) * width.saturating_sub(1) as f32).round() as usize;
+    let mut s = String::from("[");
+    for i in 0..width {
+        s.push(if i < pos { '━' } else if i == pos { '●' } else { '─' });
+    }
+    s.push(']');
+    s
+}
+
+/// Format a float param value with appropriate precision
+fn format_param_value(value: f32, min: f32, max: f32) -> String {
+    let range = max - min;
+    if range >= 100.0 {
+        format!("{:.0}", value)
+    } else if range >= 1.0 {
+        format!("{:.2}", value)
+    } else {
+        format!("{:.3}", value)
     }
 }
 

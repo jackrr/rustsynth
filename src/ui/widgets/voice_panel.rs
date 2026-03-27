@@ -9,14 +9,13 @@ use ratatui::{
 use crate::state::messages::{ConfigCommand, OscillatorType};
 use crate::state::synth_state::{EnvelopeParams, SynthState};
 
-/// Which sub-section of the voice detail is focused for editing
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum VoiceEditSection {
-    Grid,        // navigating the voice grid
-    Oscillator,  // editing osc type
-    Envelope,    // editing ADSR (selected_env_param selects A/D/S/R)
-    Sends,       // editing send levels (selected_send selects group A-D)
-}
+/// Flat parameter indices used when editing a voice.
+/// ↑↓ cycles through these; ←→ adjusts the selected one.
+/// 0-2: OSC (wave, note, velocity)
+/// 3-5: SUB (on, octave, level)
+/// 6-9: ENV (attack, decay, sustain, release)
+/// 10-13: SENDS (A, B, C, D)
+const PARAM_COUNT: usize = 14;
 
 /// Snapshot of a voice's configuration, used for copy/paste
 #[derive(Debug, Clone)]
@@ -24,14 +23,17 @@ pub struct VoiceClipboard {
     pub osc_type: OscillatorType,
     pub envelope: EnvelopeParams,
     pub sends: [f32; 4],
+    pub sub_osc_enabled: bool,
+    pub sub_osc_octave: i32,
+    pub sub_osc_level: f32,
 }
 
 pub struct VoicePanel {
     pub selected_voice: usize,
-    pub edit_section: VoiceEditSection,
-    pub selected_osc_field: usize,  // 0=waveform  1=note  2=velocity
-    pub selected_env_param: usize,  // 0=Attack 1=Decay 2=Sustain 3=Release
-    pub selected_send: usize,       // 0-3 = group A-D
+    /// Whether we're in edit mode (Enter toggles)
+    pub editing: bool,
+    /// Which param is highlighted when editing (0–13)
+    pub selected_param: usize,
     pub clipboard: Option<VoiceClipboard>,
 }
 
@@ -39,10 +41,8 @@ impl VoicePanel {
     pub fn new() -> Self {
         VoicePanel {
             selected_voice: 0,
-            edit_section: VoiceEditSection::Grid,
-            selected_osc_field: 0,
-            selected_env_param: 0,
-            selected_send: 0,
+            editing: false,
+            selected_param: 0,
             clipboard: None,
         }
     }
@@ -51,8 +51,8 @@ impl VoicePanel {
     fn voice_to_grid(v: usize) -> (usize, usize) {
         if v < 4       { (0, v) }
         else if v < 8  { (1, v - 4) }
-        else if v < 12 { (0, v - 4) }   // col 4-7, row 0
-        else           { (1, v - 8) }   // col 4-7, row 1 — note: v-8 gives col 4-7
+        else if v < 12 { (0, v - 4) }
+        else           { (1, v - 8) }
     }
 
     fn grid_to_voice(row: usize, col: usize) -> usize {
@@ -82,8 +82,11 @@ impl VoicePanel {
 
     fn render_voice_grid(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
         let clip_hint = if self.clipboard.is_some() { "  [clipboard ready — p:paste]" } else { "" };
-        let title = format!("Voices  (↑↓←→:navigate  Enter:edit  c:copy  p:paste{})", clip_hint);
-        let block = Block::default().title(title).borders(Borders::ALL);
+        let mode_hint = if self.editing { "  [EDITING — ↑↓:param  ←→:adjust  Shift:fine  Enter/Esc:done]" } else { "  [↑↓←→:navigate  Enter:edit  c:copy  p:paste]" };
+        let title = format!("Voices{}{}", mode_hint, clip_hint);
+        let block = Block::default().title(title).borders(Borders::ALL).border_style(
+            if self.editing { Style::default().fg(Color::Yellow) } else { Style::default() }
+        );
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -117,13 +120,10 @@ impl VoicePanel {
                     let note_name = midi_note_name(voice.midi_note);
                     let amp_bar = amplitude_bar(voice.amplitude, 8);
 
-                    let is_copied = self.clipboard.is_some() && voice_idx == self.selected_voice
-                        && self.edit_section == VoiceEditSection::Grid;
-
-                    let border_style = if is_selected {
+                    let border_style = if is_selected && self.editing {
                         Style::default().fg(Color::Yellow)
-                    } else if is_copied {
-                        Style::default().fg(Color::Magenta)
+                    } else if is_selected {
+                        Style::default().fg(Color::Cyan)
                     } else {
                         Style::default().fg(Color::DarkGray)
                     };
@@ -162,7 +162,6 @@ impl VoicePanel {
             .constraints([Constraint::Min(8), Constraint::Length(10)])
             .split(area);
 
-        // Narrow left/right panels so the envelope shape gets most of the width.
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -172,10 +171,10 @@ impl VoicePanel {
             ])
             .split(rows[0]);
 
-        // --- Left: stacked Osc + Env params ---
+        // --- Left: stacked Osc + Sub + Env params ---
         render_params_panel(
             frame, chunks[0], state, self.selected_voice,
-            self.edit_section, self.selected_osc_field, self.selected_env_param,
+            self.editing, self.selected_param,
         );
 
         // --- Middle: ADSR shape ---
@@ -183,12 +182,12 @@ impl VoicePanel {
 
         // --- Right: Sends ---
         let send_labels = ["A", "B", "C", "D"];
-        let sends_focused = self.edit_section == VoiceEditSection::Sends;
+        let sends_focused = self.editing && self.selected_param >= 10;
 
         let sends: Vec<ListItem> = (0..4).map(|g| {
             let level = state.routing[self.selected_voice][g];
             let bar = send_bar(level, 10);
-            let is_selected = sends_focused && g == self.selected_send;
+            let is_selected = sends_focused && g == self.selected_param - 10;
             let style = if is_selected {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             } else if sends_focused {
@@ -213,69 +212,42 @@ impl VoicePanel {
         render_oscilloscope(frame, rows[1], &state.scope);
     }
 
-    /// Returns the help text for the current edit section
     pub fn help_text(&self) -> &str {
-        match self.edit_section {
-            VoiceEditSection::Grid =>
-                "↑↓←→:Navigate  Tab:Next voice  Space:Trigger  Enter:Edit  o:Cycle osc  c:Copy  p:Paste  q:Quit",
-            VoiceEditSection::Oscillator =>
-                "↑↓:Field  ←→:Adjust  (Wave: cycle type  Note: semitone/octave  Vel: ±5%)  Shift:fine  Tab:Next section  Esc:Grid",
-            VoiceEditSection::Envelope =>
-                "↑↓:Select param  ←→:Adjust value  Tab:Next section  Esc:Back to grid  q:Quit",
-            VoiceEditSection::Sends =>
-                "↑↓:Select group  ←→:Adjust level  Tab:Next section  Esc:Back to grid  q:Quit",
+        if self.editing {
+            "↑↓:Select param  ←→:Adjust  Shift:Fine  Space:Trigger  Enter/Esc:Done editing  q:Quit"
+        } else {
+            "↑↓←→:Navigate voice  Tab:Next  Space:Trigger  Enter:Edit  o:Cycle osc  c:Copy  p:Paste  q:Quit"
         }
     }
 
     /// Handle a key event; returns commands to send to the audio engine.
-    /// Returns Vec because paste emits multiple commands at once.
     pub fn handle_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) -> Vec<ConfigCommand> {
         use crossterm::event::{KeyCode, KeyModifiers};
+        let fine = key.modifiers.contains(KeyModifiers::SHIFT);
 
-        match self.edit_section {
-            VoiceEditSection::Grid => match key.code {
+        if self.editing {
+            match key.code {
+                KeyCode::Up    => { self.selected_param = self.selected_param.saturating_sub(1); vec![] }
+                KeyCode::Down  => { self.selected_param = (self.selected_param + 1).min(PARAM_COUNT - 1); vec![] }
+                KeyCode::Left  => self.adjust_param(state, -1, fine),
+                KeyCode::Right => self.adjust_param(state,  1, fine),
+                KeyCode::Enter | KeyCode::Esc => { self.editing = false; vec![] }
+                _ => vec![],
+            }
+        } else {
+            match key.code {
                 KeyCode::Up    => { self.move_grid(-1,  0); vec![] }
                 KeyCode::Down  => { self.move_grid( 1,  0); vec![] }
                 KeyCode::Left  => { self.move_grid( 0, -1); vec![] }
                 KeyCode::Right => { self.move_grid( 0,  1); vec![] }
-                KeyCode::Tab   => { self.selected_voice = (self.selected_voice + 1) % 16; vec![] }
-                KeyCode::BackTab => { self.selected_voice = self.selected_voice.checked_sub(1).unwrap_or(15); vec![] }
-                KeyCode::Enter => { self.edit_section = VoiceEditSection::Oscillator; vec![] }
+                KeyCode::Tab      => { self.selected_voice = (self.selected_voice + 1) % 16; vec![] }
+                KeyCode::BackTab  => { self.selected_voice = self.selected_voice.checked_sub(1).unwrap_or(15); vec![] }
+                KeyCode::Enter    => { self.editing = true; vec![] }
                 KeyCode::Char('o') => self.cycle_osc(state, 1).into_iter().collect(),
                 KeyCode::Char('c') => { self.copy_voice(state); vec![] }
                 KeyCode::Char('p') => self.paste_voice(state),
                 _ => vec![],
-            },
-
-            VoiceEditSection::Oscillator => match key.code {
-                KeyCode::Up    => { self.selected_osc_field = self.selected_osc_field.saturating_sub(1); vec![] }
-                KeyCode::Down  => { self.selected_osc_field = (self.selected_osc_field + 1).min(2); vec![] }
-                KeyCode::Left  => self.adjust_osc_field(state, -1, key.modifiers.contains(KeyModifiers::SHIFT)),
-                KeyCode::Right => self.adjust_osc_field(state,  1, key.modifiers.contains(KeyModifiers::SHIFT)),
-                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Envelope; vec![] }
-                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; vec![] }
-                _ => vec![],
-            },
-
-            VoiceEditSection::Envelope => match key.code {
-                KeyCode::Up    => { self.selected_env_param = self.selected_env_param.saturating_sub(1); vec![] }
-                KeyCode::Down  => { self.selected_env_param = (self.selected_env_param + 1).min(3); vec![] }
-                KeyCode::Left  => self.adjust_envelope(state, -1, key.modifiers.contains(KeyModifiers::SHIFT)).into_iter().collect(),
-                KeyCode::Right => self.adjust_envelope(state,  1, key.modifiers.contains(KeyModifiers::SHIFT)).into_iter().collect(),
-                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Sends; vec![] }
-                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; vec![] }
-                _ => vec![],
-            },
-
-            VoiceEditSection::Sends => match key.code {
-                KeyCode::Up    => { self.selected_send = self.selected_send.saturating_sub(1); vec![] }
-                KeyCode::Down  => { self.selected_send = (self.selected_send + 1).min(3); vec![] }
-                KeyCode::Left  => self.adjust_send(state, -1, key.modifiers.contains(KeyModifiers::SHIFT)).into_iter().collect(),
-                KeyCode::Right => self.adjust_send(state,  1, key.modifiers.contains(KeyModifiers::SHIFT)).into_iter().collect(),
-                KeyCode::Tab   => { self.edit_section = VoiceEditSection::Grid; vec![] }
-                KeyCode::Esc   => { self.edit_section = VoiceEditSection::Grid; vec![] }
-                _ => vec![],
-            },
+            }
         }
     }
 
@@ -285,17 +257,16 @@ impl VoicePanel {
             osc_type: voice.osc_type,
             envelope: voice.envelope.clone(),
             sends: state.routing[self.selected_voice],
+            sub_osc_enabled: voice.sub_osc_enabled,
+            sub_osc_octave: voice.sub_osc_octave,
+            sub_osc_level: voice.sub_osc_level,
         });
     }
 
     fn paste_voice(&self, state: &SynthState) -> Vec<ConfigCommand> {
         let Some(ref clip) = self.clipboard else { return vec![]; };
         let dst = self.selected_voice;
-
-        // Don't paste onto the same voice the clipboard was copied from
-        // (detect by checking if config already matches — just paste anyway, it's harmless)
-        let _ = state; // state available if we need it for guards
-
+        let _ = state;
         let mut cmds = vec![
             ConfigCommand::SetOscillator { voice: dst, osc_type: clip.osc_type },
             ConfigCommand::SetEnvelope {
@@ -304,6 +275,12 @@ impl VoicePanel {
                 decay:   clip.envelope.decay,
                 sustain: clip.envelope.sustain,
                 release: clip.envelope.release,
+            },
+            ConfigCommand::SetSubOsc {
+                voice: dst,
+                enabled: clip.sub_osc_enabled,
+                octave: clip.sub_osc_octave,
+                level: clip.sub_osc_level,
             },
         ];
         for g in 0..4 {
@@ -320,48 +297,62 @@ impl VoicePanel {
         Some(ConfigCommand::SetOscillator { voice: self.selected_voice, osc_type: types[new_idx] })
     }
 
-    fn adjust_osc_field(&self, state: &SynthState, dir: i32, fine: bool) -> Vec<ConfigCommand> {
-        match self.selected_osc_field {
+    /// Adjust the currently selected param by `dir` (+1 or -1).
+    fn adjust_param(&self, state: &SynthState, dir: i32, fine: bool) -> Vec<ConfigCommand> {
+        let v = &state.voices[self.selected_voice];
+        let voice = self.selected_voice;
+        match self.selected_param {
+            // --- OSC ---
             0 => self.cycle_osc(state, dir).into_iter().collect(),
             1 => {
-                let cur = state.voices[self.selected_voice].default_midi_note as i32;
                 let step: i32 = if fine { 1 } else { 12 };
-                let new_note = (cur + dir * step).clamp(0, 127) as u8;
-                vec![ConfigCommand::SetDefaultNote { voice: self.selected_voice, midi_note: new_note }]
+                let new_note = (v.default_midi_note as i32 + dir * step).clamp(0, 127) as u8;
+                vec![ConfigCommand::SetDefaultNote { voice, midi_note: new_note }]
             }
             2 => {
-                let cur = state.voices[self.selected_voice].default_velocity;
                 let step = if fine { 0.01 } else { 0.05 };
-                let new_vel = (cur + dir as f32 * step).clamp(0.0, 1.0);
-                vec![ConfigCommand::SetDefaultVelocity { voice: self.selected_voice, velocity: new_vel }]
+                let new_vel = (v.default_velocity + dir as f32 * step).clamp(0.0, 1.0);
+                vec![ConfigCommand::SetDefaultVelocity { voice, velocity: new_vel }]
+            }
+            // --- SUB ---
+            3 => vec![ConfigCommand::SetSubOsc {
+                voice,
+                enabled: !v.sub_osc_enabled,
+                octave: v.sub_osc_octave,
+                level: v.sub_osc_level,
+            }],
+            4 => {
+                let new_oct = (v.sub_osc_octave + dir).clamp(-2, 2);
+                vec![ConfigCommand::SetSubOsc { voice, enabled: v.sub_osc_enabled, octave: new_oct, level: v.sub_osc_level }]
+            }
+            5 => {
+                let step = if fine { 0.01 } else { 0.05 };
+                let new_level = (v.sub_osc_level + dir as f32 * step).clamp(0.0, 1.0);
+                vec![ConfigCommand::SetSubOsc { voice, enabled: v.sub_osc_enabled, octave: v.sub_osc_octave, level: new_level }]
+            }
+            // --- ENV ---
+            6..=9 => {
+                let env = &v.envelope;
+                let (a, d, s, r) = (env.attack, env.decay, env.sustain, env.release);
+                let sign = dir as f32;
+                let (na, nd, ns, nr) = match self.selected_param {
+                    6 => { let st = if fine { 0.01 } else { 0.1 }; ((a + sign * st).clamp(0.001, 10.0), d, s, r) }
+                    7 => { let st = if fine { 0.01 } else { 0.1 }; (a, (d + sign * st).clamp(0.001, 10.0), s, r) }
+                    8 => { let st = if fine { 0.01 } else { 0.05 }; (a, d, (s + sign * st).clamp(0.0, 1.0), r) }
+                    9 => { let st = if fine { 0.01 } else { 0.1 }; (a, d, s, (r + sign * st).clamp(0.001, 10.0)) }
+                    _ => unreachable!(),
+                };
+                vec![ConfigCommand::SetEnvelope { voice, attack: na, decay: nd, sustain: ns, release: nr }]
+            }
+            // --- SENDS ---
+            10..=13 => {
+                let g = self.selected_param - 10;
+                let step = if fine { 0.01 } else { 0.1 };
+                let current = state.routing[voice][g];
+                vec![ConfigCommand::SetSendLevel { voice, group: g, level: (current + dir as f32 * step).clamp(0.0, 1.0) }]
             }
             _ => vec![],
         }
-    }
-
-    fn adjust_envelope(&self, state: &SynthState, dir: i32, fine: bool) -> Option<ConfigCommand> {
-        let env = &state.voices[self.selected_voice].envelope;
-        let (a, d, s, r) = (env.attack, env.decay, env.sustain, env.release);
-        let sign = dir as f32;
-        // Time params: coarse=0.1s, fine=0.01s  |  Sustain (0-1): coarse=0.05, fine=0.01
-        let (new_a, new_d, new_s, new_r) = match self.selected_env_param {
-            0 => { let step = if fine { 0.01 } else { 0.1 }; ((a + sign * step).clamp(0.001, 10.0), d, s, r) }
-            1 => { let step = if fine { 0.01 } else { 0.1 }; (a, (d + sign * step).clamp(0.001, 10.0), s, r) }
-            2 => { let step = if fine { 0.01 } else { 0.05 }; (a, d, (s + sign * step).clamp(0.0, 1.0), r) }
-            3 => { let step = if fine { 0.01 } else { 0.1 }; (a, d, s, (r + sign * step).clamp(0.001, 10.0)) }
-            _ => return None,
-        };
-        Some(ConfigCommand::SetEnvelope { voice: self.selected_voice, attack: new_a, decay: new_d, sustain: new_s, release: new_r })
-    }
-
-    fn adjust_send(&self, state: &SynthState, dir: i32, fine: bool) -> Option<ConfigCommand> {
-        let step = if fine { 0.01 } else { 0.1 };
-        let current = state.routing[self.selected_voice][self.selected_send];
-        Some(ConfigCommand::SetSendLevel {
-            voice: self.selected_voice,
-            group: self.selected_send,
-            level: (current + dir as f32 * step).clamp(0.0, 1.0),
-        })
     }
 }
 
@@ -374,20 +365,16 @@ fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
         return;
     }
 
-    // Braille characters give 2 dots wide × 4 dots tall per terminal cell.
     let dot_w = inner.width as usize * 2;
     let dot_h = inner.height as usize * 4;
 
-    // Zero-crossing sync: find the first rising edge so the waveform is stable.
     let sync_pos = (1..scope.len().saturating_sub(dot_w + 2))
         .find(|&i| scope[i - 1] < 0.0 && scope[i] >= 0.0)
         .unwrap_or(0);
 
-    // Period detection: find the next rising edge to measure one cycle.
     let next_crossing = ((sync_pos + 4).min(scope.len())..scope.len().saturating_sub(1))
         .find(|&i| scope[i - 1] < 0.0 && scope[i] >= 0.0);
 
-    // Show ~2.5 periods for a clear waveform shape; fall back to a wide window.
     let display_len = if let Some(next) = next_crossing {
         let period = next - sync_pos;
         ((period as f32 * 2.5) as usize)
@@ -399,17 +386,14 @@ fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
     let samples = &scope[sync_pos..(sync_pos + display_len).min(scope.len())];
     if samples.len() < 2 { return; }
 
-    // Build boolean dot grid (row-major).
     let mut dots = vec![false; dot_w * dot_h];
 
-    // Zoom in on the y-axis so ±0.5 fills the display — shows waveform detail.
     let to_dot_row = |v: f32| -> usize {
         let zoom = 0.55_f32;
         let norm = (1.0 - (v / zoom).clamp(-1.0, 1.0)) / 2.0;
         (norm * (dot_h - 1) as f32).round() as usize
     };
 
-    // Sample value at a dot-column using linear interpolation.
     let interp = |dx: usize| -> f32 {
         let t = dx as f32 / (dot_w - 1).max(1) as f32;
         let si_f = t * (samples.len() - 1) as f32;
@@ -419,7 +403,6 @@ fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
         samples[si0] * (1.0 - frac) + samples[si1] * frac
     };
 
-    // Draw a connected line through each dot column.
     for dx in 0..dot_w {
         let row = to_dot_row(interp(dx));
         let prev_row = if dx > 0 { to_dot_row(interp(dx - 1)) } else { row };
@@ -429,8 +412,6 @@ fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
         }
     }
 
-    // Braille dot-to-bit mapping within each 2×4 character cell.
-    // (row_offset, col_offset, bit)
     const DOT_MAP: [(usize, usize, u32); 8] = [
         (0, 0, 0x01), (1, 0, 0x02), (2, 0, 0x04), (3, 0, 0x40),
         (0, 1, 0x08), (1, 1, 0x10), (2, 1, 0x20), (3, 1, 0x80),
@@ -449,7 +430,6 @@ fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
 
             let (ch, color) = if bits != 0 {
                 let ch = char::from_u32(0x2800 + bits).unwrap_or('?');
-                // Amplitude-based color: sample nearest the center of this cell
                 let cx_dot = cx * 2 + 1;
                 let t = cx_dot as f32 / (dot_w - 1).max(1) as f32;
                 let si = (t * (samples.len() - 1) as f32) as usize;
@@ -471,30 +451,19 @@ fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Combined oscillator + envelope params panel (left column of voice detail).
+/// Combined oscillator + sub + envelope params panel (left column of voice detail).
 fn render_params_panel(
     frame: &mut Frame,
     area: Rect,
     state: &SynthState,
     voice_idx: usize,
-    edit_section: VoiceEditSection,
-    selected_osc_field: usize,
-    selected_env_param: usize,
+    editing: bool,
+    selected_param: usize,
 ) {
     let v = &state.voices[voice_idx];
-    let osc_focused = edit_section == VoiceEditSection::Oscillator;
-    let env_focused = edit_section == VoiceEditSection::Envelope;
 
-    let title = match edit_section {
-        VoiceEditSection::Oscillator => "Params [↑↓  ←→]",
-        VoiceEditSection::Envelope   => "Params [↑↓  ←→]",
-        _                            => "Params",
-    };
-    let border_style = if osc_focused || env_focused {
-        Style::default().fg(Color::Yellow)
-    } else {
-        Style::default()
-    };
+    let title = if editing { "Params [↑↓  ←→]" } else { "Params" };
+    let border_style = if editing { Style::default().fg(Color::Yellow) } else { Style::default() };
     let block = Block::default().title(title).borders(Borders::ALL).border_style(border_style);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -521,14 +490,14 @@ fn render_params_panel(
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // OSC section header
+    // OSC section
     lines.push(Line::styled(
         " OSC",
-        Style::default().fg(if osc_focused { Color::Yellow } else { Color::DarkGray })
-            .add_modifier(if osc_focused { Modifier::BOLD } else { Modifier::empty() }),
+        Style::default().fg(if editing && selected_param <= 2 { Color::Yellow } else { Color::DarkGray })
+            .add_modifier(if editing && selected_param <= 2 { Modifier::BOLD } else { Modifier::empty() }),
     ));
     for (i, (label, value)) in osc_fields.iter().enumerate() {
-        let is_sel = osc_focused && i == selected_osc_field;
+        let is_sel = editing && i == selected_param;
         let ind = if is_sel { "►" } else { " " };
         if is_sel {
             lines.push(Line::from(vec![
@@ -543,16 +512,47 @@ fn render_params_panel(
         }
     }
 
+    // SUB section
     lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        " SUB",
+        Style::default().fg(if editing && selected_param >= 3 && selected_param <= 5 { Color::Yellow } else { Color::DarkGray })
+            .add_modifier(if editing && selected_param >= 3 && selected_param <= 5 { Modifier::BOLD } else { Modifier::empty() }),
+    ));
+    let sub_fields: [(&str, String); 3] = [
+        ("On",  if v.sub_osc_enabled { "On".to_string() } else { "Off".to_string() }),
+        ("Oct", format!("{:+}", v.sub_osc_octave)),
+        ("Lvl", format!("{:.0}%", v.sub_osc_level * 100.0)),
+    ];
+    for (i, (label, value)) in sub_fields.iter().enumerate() {
+        let param_idx = 3 + i;
+        let is_sel = editing && param_idx == selected_param;
+        let ind = if is_sel { "►" } else { " " };
+        let dim = !v.sub_osc_enabled && i > 0;
+        let val_color = if dim { Color::DarkGray } else { Color::Cyan };
+        if is_sel {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(value.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::DarkGray)),
+                Span::styled(value.clone(), Style::default().fg(val_color)),
+            ]));
+        }
+    }
 
-    // ENV section header
+    // ENV section
+    lines.push(Line::raw(""));
     lines.push(Line::styled(
         " ENV",
-        Style::default().fg(if env_focused { Color::Yellow } else { Color::DarkGray })
-            .add_modifier(if env_focused { Modifier::BOLD } else { Modifier::empty() }),
+        Style::default().fg(if editing && selected_param >= 6 && selected_param <= 9 { Color::Yellow } else { Color::DarkGray })
+            .add_modifier(if editing && selected_param >= 6 && selected_param <= 9 { Modifier::BOLD } else { Modifier::empty() }),
     ));
     for (i, (name, val, unit, min, max)) in env_fields.iter().enumerate() {
-        let is_sel = env_focused && i == selected_env_param;
+        let param_idx = 6 + i;
+        let is_sel = editing && param_idx == selected_param;
         let color = PHASE_COLORS[i];
         let bar = mini_bar(*val, *min, *max, 4);
         let ind = if is_sel { "►" } else { " " };
@@ -581,7 +581,6 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
 
     const PHASE_COLORS: [Color; 4] = [Color::Green, Color::Yellow, Color::Cyan, Color::Magenta];
 
-    // Proportional dot-column widths per phase.
     let sustain_t = 0.3f32;
     let total_t = env.attack + env.decay + sustain_t + env.release;
     let a_cols = ((env.attack  / total_t) * dot_w as f32).round() as usize;
@@ -596,8 +595,6 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
         else { 3 }
     };
 
-    // Envelope amplitude (0..1) at each dot column, with linear interpolation
-    // so even tiny phases have smooth slopes.
     let envelope_at = |x: usize| -> f32 {
         if x < a_cols {
             if a_cols > 0 { x as f32 / a_cols as f32 } else { 1.0 }
@@ -612,34 +609,28 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
         }
     };
 
-    // Map amplitude to dot row: 1.0 → row 0 (top), 0.0 → row dot_h-1 (bottom).
     let to_dot_row = |v: f32| -> usize {
         ((1.0 - v.clamp(0.0, 1.0)) * (dot_h - 1) as f32).round() as usize
     };
 
-    // Dot grid: each entry is (set, color).
     let mut dots: Vec<(bool, Color)> = vec![(false, Color::Reset); dot_w * dot_h];
 
     for dx in 0..dot_w {
         let outline_row = to_dot_row(envelope_at(dx));
         let color = PHASE_COLORS[phase_of(dx)];
 
-        // Filled shape: all dots from outline down to the bottom.
         for r in outline_row..dot_h {
             dots[r * dot_w + dx] = (true, color);
         }
 
-        // Stitch to previous column to prevent gaps on steep slopes.
         if dx > 0 {
             let prev_outline = to_dot_row(envelope_at(dx - 1));
             let prev_color = PHASE_COLORS[phase_of(dx - 1)];
             if outline_row < prev_outline {
-                // Current column is higher: fill the gap on the current column.
                 for r in outline_row..prev_outline {
                     dots[r * dot_w + dx] = (true, color);
                 }
             } else if prev_outline < outline_row {
-                // Previous column is higher: fill the gap there.
                 for r in prev_outline..outline_row {
                     if !dots[r * dot_w + (dx - 1)].0 {
                         dots[r * dot_w + (dx - 1)] = (true, prev_color);
@@ -649,7 +640,6 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
         }
     }
 
-    // Braille dot-to-bit mapping within each 2×4 terminal cell.
     const DOT_MAP: [(usize, usize, u32); 8] = [
         (0, 0, 0x01), (1, 0, 0x02), (2, 0, 0x04), (3, 0, 0x40),
         (0, 1, 0x08), (1, 1, 0x10), (2, 1, 0x20), (3, 1, 0x80),
@@ -661,7 +651,6 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
     let lines: Vec<Line> = (0..h).map(|cy| {
         Line::from((0..w).map(|cx| {
             let mut bits: u32 = 0;
-            // Use the color of the topmost set dot in this cell (the outline row).
             let mut cell_color = Color::DarkGray;
             let mut top_set_row = dot_h;
             for (dr, dc, bit) in &DOT_MAP {

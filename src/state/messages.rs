@@ -14,6 +14,7 @@ pub enum ConfigCommand {
     SetOscillator { voice: usize, osc_type: OscillatorType },
     SetDefaultNote { voice: usize, midi_note: u8 },
     SetDefaultVelocity { voice: usize, velocity: f32 },
+    SetSubOsc { voice: usize, enabled: bool, octave: i32, level: f32 },
     SetEnvelope { voice: usize, attack: f32, decay: f32, sustain: f32, release: f32 },
     SetSendLevel { voice: usize, group: usize, level: f32 },
     AddEffect { group: usize, effect_type: EffectType, position: usize },
@@ -103,6 +104,7 @@ pub enum EffectType {
     Bandpass,
     Eq3,
     Compressor,
+    WhiteNoise,
 }
 
 impl EffectType {
@@ -123,6 +125,7 @@ impl EffectType {
             EffectType::Bandpass => "Bandpass",
             EffectType::Eq3 => "EQ3",
             EffectType::Compressor => "Compressor",
+            EffectType::WhiteNoise => "WhiteNoise",
         }
     }
 
