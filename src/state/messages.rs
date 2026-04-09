@@ -24,6 +24,16 @@ pub enum ConfigCommand {
     RemoveEffect { group: usize, position: usize },
     SetEffectParam { group: usize, effect_idx: usize, param: String, value: f32 },
     EnableGroup { group: usize, enabled: bool },
+    SeqPlay,
+    SeqStop,
+    SeqTogglePlay,
+    SeqSetBpm { bpm: f32 },
+    SeqSetStepCount { count: usize },
+    SeqSetSwing { swing: f32 },
+    SeqSetStep { voice: usize, step: usize, enabled: bool, midi_note: u8, velocity: f32 },
+    SeqClearRow { voice: usize },
+    SeqCopyRow { src_voice: usize, dst_voice: usize },
+    SeqClearAll,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]

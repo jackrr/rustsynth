@@ -4,10 +4,12 @@ use crossbeam_channel::Receiver;
 
 use crate::audio::effect_group::EffectGroup;
 use crate::audio::routing::RoutingMatrix;
+use crate::audio::sequencer::AudioSequencer;
 use crate::audio::voice::Voice;
 use crate::state::messages::{ConfigCommand, NoteCommand};
 use crate::state::synth_state::{
-    EffectParamState, EffectState, EnvelopeParams, GroupState, SynthState, VoiceState,
+    EffectParamState, EffectState, EnvelopeParams, GroupState, SequencerSnapshot,
+    SequencerStepSnapshot, SynthState, VoiceState,
 };
 
 const SCOPE_LEN: usize = 4096;
@@ -16,6 +18,7 @@ pub struct AudioEngine {
     voices: [Voice; 16],
     effect_groups: [EffectGroup; 4],
     routing: RoutingMatrix,
+    sequencer: AudioSequencer,
     note_rx: Receiver<NoteCommand>,
     config_rx: Receiver<ConfigCommand>,
     state_publisher: Arc<ArcSwap<SynthState>>,
@@ -44,6 +47,7 @@ impl AudioEngine {
             voices,
             effect_groups,
             routing: RoutingMatrix::new(),
+            sequencer: AudioSequencer::new(sample_rate),
             note_rx,
             config_rx,
             state_publisher,
@@ -131,6 +135,48 @@ impl AudioEngine {
                     self.voices[voice].soloed = soloed;
                 }
             }
+            ConfigCommand::SeqPlay => {
+                self.sequencer.pattern.playing = true;
+            }
+            ConfigCommand::SeqStop => {
+                self.sequencer.stop();
+            }
+            ConfigCommand::SeqTogglePlay => {
+                self.sequencer.pattern.playing = !self.sequencer.pattern.playing;
+            }
+            ConfigCommand::SeqSetBpm { bpm } => {
+                self.sequencer.set_bpm(bpm);
+            }
+            ConfigCommand::SeqSetStepCount { count } => {
+                self.sequencer.pattern.step_count = count.clamp(1, 16);
+            }
+            ConfigCommand::SeqSetSwing { swing } => {
+                self.sequencer.pattern.swing = swing.clamp(0.0, 0.5);
+            }
+            ConfigCommand::SeqSetStep { voice, step, enabled, midi_note, velocity } => {
+                if voice < 16 && step < 16 {
+                    self.sequencer.pattern.steps[voice][step] = crate::audio::sequencer::SequencerStep { enabled, midi_note, velocity };
+                }
+            }
+            ConfigCommand::SeqClearRow { voice } => {
+                if voice < 16 {
+                    for s in &mut self.sequencer.pattern.steps[voice] {
+                        s.enabled = false;
+                    }
+                }
+            }
+            ConfigCommand::SeqCopyRow { src_voice, dst_voice } => {
+                if src_voice < 16 && dst_voice < 16 {
+                    self.sequencer.pattern.steps[dst_voice] = self.sequencer.pattern.steps[src_voice];
+                }
+            }
+            ConfigCommand::SeqClearAll => {
+                for row in &mut self.sequencer.pattern.steps {
+                    for s in row.iter_mut() {
+                        s.enabled = false;
+                    }
+                }
+            }
         }
     }
 
@@ -190,11 +236,26 @@ impl AudioEngine {
         scope[..SCOPE_LEN - idx].copy_from_slice(&self.scope_buf[idx..]);
         scope[SCOPE_LEN - idx..].copy_from_slice(&self.scope_buf[..idx]);
 
+        let seq = SequencerSnapshot {
+            playing: self.sequencer.pattern.playing,
+            current_step: self.sequencer.current_step,
+            bpm: self.sequencer.pattern.bpm,
+            step_count: self.sequencer.pattern.step_count,
+            swing: self.sequencer.pattern.swing,
+            steps: std::array::from_fn(|v| {
+                std::array::from_fn(|s| {
+                    let step = &self.sequencer.pattern.steps[v][s];
+                    SequencerStepSnapshot { enabled: step.enabled, midi_note: step.midi_note, velocity: step.velocity }
+                })
+            }),
+        };
+
         let snapshot = Arc::new(SynthState {
             voices,
             groups,
             routing,
             scope,
+            seq,
         });
 
         self.state_publisher.store(snapshot);
@@ -214,6 +275,9 @@ impl AudioEngine {
 
         let mut ch_counter = 0usize;
         for sample in output.iter_mut() {
+            // Advance sequencer one sample (fires note_on_raw on voices when a step triggers)
+            self.sequencer.tick(&mut self.voices);
+
             // Initialize group inputs
             let mut group_inputs = [0.0_f32; 4];
 

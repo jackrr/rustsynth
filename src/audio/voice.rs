@@ -48,6 +48,19 @@ impl Voice {
         }
     }
 
+    pub fn note_on_raw(&mut self, midi_note: u8, velocity: f32, length_samples: u64) {
+        self.midi_note = midi_note;
+        self.velocity = velocity;
+        self.length_remaining = length_samples;
+        let freq = midi_to_freq(midi_note);
+        self.oscillator.set_frequency(freq);
+        self.oscillator.reset();
+        self.sub_osc.set_frequency(freq * 2f32.powi(self.sub_osc_octave));
+        self.sub_osc.reset();
+        self.envelope.note_on();
+        self.active = true;
+    }
+
     pub fn note_on(&mut self, cmd: &NoteCommand) {
         self.midi_note = cmd.midi_note;
         self.velocity = cmd.velocity;

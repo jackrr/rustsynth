@@ -1,5 +1,41 @@
 use crate::state::messages::{EffectType, OscillatorType};
 
+#[derive(Debug, Clone, Copy)]
+pub struct SequencerStepSnapshot {
+    pub enabled: bool,
+    pub midi_note: u8,
+    pub velocity: f32,
+}
+
+impl Default for SequencerStepSnapshot {
+    fn default() -> Self {
+        SequencerStepSnapshot { enabled: false, midi_note: 60, velocity: 0.75 }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SequencerSnapshot {
+    pub playing: bool,
+    pub current_step: usize,
+    pub bpm: f32,
+    pub step_count: usize,
+    pub swing: f32,
+    pub steps: [[SequencerStepSnapshot; 16]; 16],
+}
+
+impl Default for SequencerSnapshot {
+    fn default() -> Self {
+        SequencerSnapshot {
+            playing: false,
+            current_step: 0,
+            bpm: 120.0,
+            step_count: 16,
+            swing: 0.0,
+            steps: std::array::from_fn(|_| std::array::from_fn(|_| SequencerStepSnapshot::default())),
+        }
+    }
+}
+
 /// ADSR envelope parameters (carried in state snapshot so TUI can display/edit them)
 #[derive(Debug, Clone)]
 pub struct EnvelopeParams {
@@ -62,6 +98,7 @@ pub struct SynthState {
     pub routing: [[f32; 4]; 16],
     /// Recent output samples for oscilloscope display (oldest → newest)
     pub scope: Vec<f32>,
+    pub seq: SequencerSnapshot,
 }
 
 impl Default for VoiceState {
@@ -96,6 +133,7 @@ impl Default for SynthState {
             groups: std::array::from_fn(|_| GroupState::default()),
             routing: [[0.0; 4]; 16],
             scope: vec![0.0; 4096],
+            seq: SequencerSnapshot::default(),
         }
     }
 }

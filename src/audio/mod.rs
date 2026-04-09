@@ -5,3 +5,4 @@ pub mod dsp;
 pub mod effect_group;
 pub mod routing;
 pub mod engine;
+pub mod sequencer;

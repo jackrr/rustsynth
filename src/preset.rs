@@ -6,6 +6,14 @@ use crate::state::messages::{ConfigCommand, EffectType, OscillatorType};
 use crate::state::synth_state::SynthState;
 
 #[derive(Serialize, Deserialize)]
+pub struct SeqStepPreset {
+    voice: usize,
+    step: usize,
+    midi_note: u8,
+    velocity: f32,
+}
+
+#[derive(Serialize, Deserialize)]
 pub struct VoicePreset {
     osc_type: OscillatorType,
     attack: f32,
@@ -33,6 +41,14 @@ pub struct Preset {
     voices: Vec<VoicePreset>,
     groups: Vec<GroupPreset>,
     routing: Vec<[f32; 4]>,
+    #[serde(default)]
+    seq_bpm: Option<f32>,
+    #[serde(default)]
+    seq_step_count: Option<usize>,
+    #[serde(default)]
+    seq_swing: Option<f32>,
+    #[serde(default)]
+    seq_steps: Option<Vec<SeqStepPreset>>,
 }
 
 impl Preset {
@@ -57,7 +73,31 @@ impl Preset {
 
         let routing = state.routing.to_vec();
 
-        Preset { voices, groups, routing }
+        // Collect all enabled sequencer steps
+        let mut seq_steps = Vec::new();
+        for v in 0..16 {
+            for s in 0..16 {
+                let step = &state.seq.steps[v][s];
+                if step.enabled {
+                    seq_steps.push(SeqStepPreset {
+                        voice: v,
+                        step: s,
+                        midi_note: step.midi_note,
+                        velocity: step.velocity,
+                    });
+                }
+            }
+        }
+
+        Preset {
+            voices,
+            groups,
+            routing,
+            seq_bpm: Some(state.seq.bpm),
+            seq_step_count: Some(state.seq.step_count),
+            seq_swing: Some(state.seq.swing),
+            seq_steps: Some(seq_steps),
+        }
     }
 
     pub fn to_commands(&self) -> Vec<ConfigCommand> {
@@ -99,6 +139,32 @@ impl Preset {
         for (v, row) in self.routing.iter().enumerate() {
             for (g, &level) in row.iter().enumerate() {
                 cmds.push(ConfigCommand::SetSendLevel { voice: v, group: g, level });
+            }
+        }
+
+        // Restore sequencer settings if present
+        if let Some(bpm) = self.seq_bpm {
+            cmds.push(ConfigCommand::SeqSetBpm { bpm });
+        }
+        if let Some(count) = self.seq_step_count {
+            cmds.push(ConfigCommand::SeqSetStepCount { count });
+        }
+        if let Some(swing) = self.seq_swing {
+            cmds.push(ConfigCommand::SeqSetSwing { swing });
+        }
+        if self.seq_steps.is_some() {
+            // Clear all first, then restore enabled steps
+            cmds.push(ConfigCommand::SeqClearAll);
+            if let Some(ref steps) = self.seq_steps {
+                for s in steps {
+                    cmds.push(ConfigCommand::SeqSetStep {
+                        voice: s.voice,
+                        step: s.step,
+                        enabled: true,
+                        midi_note: s.midi_note,
+                        velocity: s.velocity,
+                    });
+                }
             }
         }
 

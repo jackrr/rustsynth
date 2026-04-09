@@ -19,7 +19,7 @@ use crate::udp::server::UdpStatus;
 use crate::ui::mode::UIMode;
 use crate::ui::widgets::{
     fx_group_panel::FxGroupPanel,
-    routing_panel::RoutingPanel,
+    sequencer_panel::SequencerPanel,
     voice_panel::VoicePanel,
 };
 
@@ -27,7 +27,7 @@ pub struct App {
     mode: UIMode,
     voice_panel: VoicePanel,
     fx_panel: FxGroupPanel,
-    routing_panel: RoutingPanel,
+    sequencer_panel: SequencerPanel,
     state: Arc<ArcSwap<SynthState>>,
     config_tx: Sender<ConfigCommand>,
     note_tx: Sender<NoteCommand>,
@@ -47,7 +47,7 @@ impl App {
             mode: UIMode::Voices,
             voice_panel: VoicePanel::new(),
             fx_panel: FxGroupPanel::new(),
-            routing_panel: RoutingPanel::new(),
+            sequencer_panel: SequencerPanel::new(),
             state,
             config_tx,
             note_tx,
@@ -97,9 +97,9 @@ impl App {
         self.render_header(frame, chunks[0]);
 
         match self.mode {
-            UIMode::Voices   => self.voice_panel.render(frame, chunks[1], state),
-            UIMode::FxGroups => self.fx_panel.render(frame, chunks[1], state),
-            UIMode::Routing  => self.routing_panel.render(frame, chunks[1], state),
+            UIMode::Voices    => self.voice_panel.render(frame, chunks[1], state),
+            UIMode::FxGroups  => self.fx_panel.render(frame, chunks[1], state),
+            UIMode::Sequencer => self.sequencer_panel.render(frame, chunks[1], state),
         }
 
         self.render_status_bar(frame, chunks[2]);
@@ -116,7 +116,7 @@ impl App {
             .block(Block::default().borders(Borders::ALL));
         frame.render_widget(title, chunks[0]);
 
-        let modes = [UIMode::Voices, UIMode::FxGroups, UIMode::Routing];
+        let modes = [UIMode::Voices, UIMode::FxGroups, UIMode::Sequencer];
         let tab_titles: Vec<Line> = modes.iter().map(|m| {
             let style = if *m == self.mode {
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
@@ -166,9 +166,9 @@ impl App {
             "↑↓:Select effect  Enter:Add  Esc:Cancel"
         } else {
             match self.mode {
-                UIMode::Voices   => self.voice_panel.help_text(),
-                UIMode::FxGroups => "↑↓:Navigate effects  Enter:Edit params  a:Add effect  d:Delete  e:Toggle group  1/2/3:Page  q:Quit",
-                UIMode::Routing  => "↑↓:Voice  Tab/[]:Group  ←→:Adjust  Enter:Toggle 0/100%  c:Copy  p:Paste  z:Zero  1/2/3:Page  q:Quit",
+                UIMode::Voices    => self.voice_panel.help_text(),
+                UIMode::FxGroups  => "↑↓:Navigate effects  Enter:Edit params  a:Add effect  d:Delete  e:Toggle group  1/2/3:Page  q:Quit",
+                UIMode::Sequencer => self.sequencer_panel.help_text(),
             }
         };
         let p = Paragraph::new(help).style(Style::default().fg(Color::White));
@@ -216,15 +216,14 @@ impl App {
         match key.code {
             KeyCode::Char('1') => { self.mode = UIMode::Voices; return; }
             KeyCode::Char('2') => { self.mode = UIMode::FxGroups; return; }
-            KeyCode::Char('3') => { self.mode = UIMode::Routing; return; }
+            KeyCode::Char('3') => { self.mode = UIMode::Sequencer; return; }
             _ => {}
         }
 
-
         match self.mode {
-            UIMode::Voices   => self.handle_voices_key(key, state),
-            UIMode::FxGroups => self.handle_fx_key(key, state),
-            UIMode::Routing  => self.handle_routing_key(key, state),
+            UIMode::Voices    => self.handle_voices_key(key, state),
+            UIMode::FxGroups  => self.handle_fx_key(key, state),
+            UIMode::Sequencer => self.handle_sequencer_key(key, state),
         }
     }
 
@@ -380,60 +379,9 @@ impl App {
         }
     }
 
-    fn handle_routing_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
-        let panel = &mut self.routing_panel;
-        match key.code {
-            KeyCode::Up   => { panel.selected_voice = panel.selected_voice.saturating_sub(1); }
-            KeyCode::Down => { panel.selected_voice = (panel.selected_voice + 1).min(15); }
-            KeyCode::Tab  => { panel.selected_group = (panel.selected_group + 1) % 4; }
-
-            KeyCode::Char(']') => { panel.selected_group = (panel.selected_group + 1) % 4; }
-            KeyCode::Char('[') => { panel.selected_group = panel.selected_group.checked_sub(1).unwrap_or(3); }
-
-            KeyCode::Left => {
-                let step = if key.modifiers.contains(KeyModifiers::SHIFT) { 0.01 } else { 0.1 };
-                let cur = state.routing[panel.selected_voice][panel.selected_group];
-                let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
-                    voice: panel.selected_voice,
-                    group: panel.selected_group,
-                    level: (cur - step).clamp(0.0, 1.0),
-                });
-            }
-            KeyCode::Right => {
-                let step = if key.modifiers.contains(KeyModifiers::SHIFT) { 0.01 } else { 0.1 };
-                let cur = state.routing[panel.selected_voice][panel.selected_group];
-                let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
-                    voice: panel.selected_voice,
-                    group: panel.selected_group,
-                    level: (cur + step).clamp(0.0, 1.0),
-                });
-            }
-            KeyCode::Enter => {
-                let cur = state.routing[panel.selected_voice][panel.selected_group];
-                let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
-                    voice: panel.selected_voice,
-                    group: panel.selected_group,
-                    level: if cur > 0.01 { 0.0 } else { 1.0 },
-                });
-            }
-            KeyCode::Char('c') => { panel.clipboard = Some(state.routing[panel.selected_voice]); }
-            KeyCode::Char('p') => {
-                if let Some(cb) = panel.clipboard {
-                    for g in 0..4 {
-                        let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
-                            voice: panel.selected_voice, group: g, level: cb[g],
-                        });
-                    }
-                }
-            }
-            KeyCode::Char('z') => {
-                for g in 0..4 {
-                    let _ = self.config_tx.try_send(ConfigCommand::SetSendLevel {
-                        voice: panel.selected_voice, group: g, level: 0.0,
-                    });
-                }
-            }
-            _ => {}
+    fn handle_sequencer_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
+        for cmd in self.sequencer_panel.handle_key(key, state) {
+            let _ = self.config_tx.try_send(cmd);
         }
     }
 }

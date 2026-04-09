@@ -2,7 +2,7 @@
 pub enum UIMode {
     Voices,
     FxGroups,
-    Routing,
+    Sequencer,
 }
 
 impl UIMode {
@@ -10,7 +10,7 @@ impl UIMode {
         match self {
             UIMode::Voices => "1:VOICES",
             UIMode::FxGroups => "2:FX GROUPS",
-            UIMode::Routing => "3:ROUTING",
+            UIMode::Sequencer => "3:SEQUENCER",
         }
     }
 }
