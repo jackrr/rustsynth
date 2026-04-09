@@ -265,6 +265,7 @@ impl App {
                 midi_note: v.default_midi_note,
                 velocity: v.default_velocity,
                 length_samples: 24000, // ~0.5s at 48kHz
+                detune_cents: 0.0,
             });
             return;
         }

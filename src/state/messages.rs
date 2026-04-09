@@ -5,6 +5,7 @@ pub struct NoteCommand {
     pub midi_note: u8,     // MIDI note number
     pub velocity: f32,     // 0.0-1.0
     pub length_samples: u64, // Duration in samples before auto-release
+    pub detune_cents: f32, // -100.0 to +100.0 cents (0 = no detune)
 }
 
 /// Configuration changes sent from TUI to audio thread
@@ -15,6 +16,8 @@ pub enum ConfigCommand {
     SetDefaultNote { voice: usize, midi_note: u8 },
     SetDefaultVelocity { voice: usize, velocity: f32 },
     SetSubOsc { voice: usize, enabled: bool, octave: i32, level: f32 },
+    MuteVoice { voice: usize, muted: bool },
+    SoloVoice { voice: usize, soloed: bool },
     SetEnvelope { voice: usize, attack: f32, decay: f32, sustain: f32, release: f32 },
     SetSendLevel { voice: usize, group: usize, level: f32 },
     AddEffect { group: usize, effect_type: EffectType, position: usize },

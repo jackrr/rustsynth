@@ -121,6 +121,16 @@ impl AudioEngine {
                     self.voices[voice].set_sub_osc(enabled, octave, level);
                 }
             }
+            ConfigCommand::MuteVoice { voice, muted } => {
+                if voice < 16 {
+                    self.voices[voice].muted = muted;
+                }
+            }
+            ConfigCommand::SoloVoice { voice, soloed } => {
+                if voice < 16 {
+                    self.voices[voice].soloed = soloed;
+                }
+            }
         }
     }
 
@@ -143,6 +153,8 @@ impl AudioEngine {
                 sub_osc_enabled: self.voices[i].sub_osc_enabled,
                 sub_osc_octave: self.voices[i].sub_osc_octave,
                 sub_osc_level: self.voices[i].sub_osc_level,
+                muted: self.voices[i].muted,
+                soloed: self.voices[i].soloed,
             }
         });
 
@@ -198,18 +210,20 @@ impl AudioEngine {
             self.apply_config_change(config);
         }
 
+        let any_soloed = self.voices.iter().any(|v| v.soloed);
+
         let mut ch_counter = 0usize;
         for sample in output.iter_mut() {
             // Initialize group inputs
             let mut group_inputs = [0.0_f32; 4];
 
             // Process each voice and route to groups
-            for (voice_idx, voice) in self.voices.iter_mut().enumerate() {
-                let voice_sample = voice.process();
+            for voice in self.voices.iter_mut() {
+                let audible = if any_soloed { voice.soloed } else { !voice.muted };
+                let voice_sample = if audible { voice.process() } else { voice.tick_silent() };
                 for (group_idx, &send_level) in voice.sends.iter().enumerate() {
                     group_inputs[group_idx] += voice_sample * send_level;
                 }
-                let _ = voice_idx; // suppress unused warning
             }
 
             // Process effect groups and sum outputs

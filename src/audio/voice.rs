@@ -21,6 +21,8 @@ pub struct Voice {
     pub sub_osc_enabled: bool,
     pub sub_osc_octave: i32,   // -2 to +2 octaves relative to main
     pub sub_osc_level: f32,    // 0.0–1.0 mix into main signal
+    pub muted: bool,
+    pub soloed: bool,
 }
 
 impl Voice {
@@ -41,6 +43,8 @@ impl Voice {
             sub_osc_enabled: false,
             sub_osc_octave: -1,
             sub_osc_level: 0.5,
+            muted: false,
+            soloed: false,
         }
     }
 
@@ -48,7 +52,7 @@ impl Voice {
         self.midi_note = cmd.midi_note;
         self.velocity = cmd.velocity;
         self.length_remaining = cmd.length_samples;
-        let freq = midi_to_freq(cmd.midi_note);
+        let freq = midi_to_freq(cmd.midi_note) * 2f32.powf(cmd.detune_cents / 1200.0);
         self.oscillator.set_frequency(freq);
         self.oscillator.reset();
         self.sub_osc.set_frequency(freq * 2f32.powi(self.sub_osc_octave));
@@ -102,6 +106,12 @@ impl Voice {
         }
 
         (osc_sample + sub_sample) * env_level * self.velocity
+    }
+
+    /// Advance voice state without producing audio (used when muted/not soloed).
+    pub fn tick_silent(&mut self) -> f32 {
+        self.process();
+        0.0
     }
 
     pub fn amplitude(&self) -> f32 {

@@ -143,6 +143,14 @@ pub fn parse_command(input: &str, sample_rate: f32) -> Option<NoteCommand> {
         0
     };
 
+    // Optional detune (7th char): base-36 0-35 mapped to 0..+100 cents
+    let detune_cents = if chars.len() > 6 {
+        let v = parse_base36(chars[6])? as f32;
+        v / 35.0 * 100.0
+    } else {
+        0.0
+    };
+
     let midi_note = note_to_midi(octave, note_char, note_offset)?;
 
     Some(NoteCommand {
@@ -150,6 +158,7 @@ pub fn parse_command(input: &str, sample_rate: f32) -> Option<NoteCommand> {
         midi_note,
         velocity,
         length_samples,
+        detune_cents,
     })
 }
 

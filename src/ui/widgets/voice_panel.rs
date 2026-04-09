@@ -136,8 +136,19 @@ impl VoicePanel {
                         Style::default().fg(Color::DarkGray)
                     };
 
+                    let badge = if voice.soloed {
+                        Span::styled("S", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                    } else if voice.muted {
+                        Span::styled("M", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                    } else {
+                        Span::raw(" ")
+                    };
                     let content = vec![
-                        Line::from(Span::styled(format!(" {:X}", voice_idx), label_style.add_modifier(Modifier::BOLD))),
+                        Line::from(vec![
+                            Span::styled(format!(" {:X}", voice_idx), label_style.add_modifier(Modifier::BOLD)),
+                            Span::raw(" "),
+                            badge,
+                        ]),
                         Line::from(Span::styled(
                             format!(" {}", if voice.active { note_name } else { "--".to_string() }),
                             label_style,
@@ -216,7 +227,7 @@ impl VoicePanel {
         if self.editing {
             "↑↓:Select param  ←→:Adjust  Shift:Fine  Space:Trigger  Enter/Esc:Done editing  q:Quit"
         } else {
-            "↑↓←→:Navigate voice  Tab:Next  Space:Trigger  Enter:Edit  o:Cycle osc  c:Copy  p:Paste  q:Quit"
+            "↑↓←→:Navigate voice  Tab:Next  Space:Trigger  Enter:Edit  o:Cycle osc  m:Mute  s:Solo  c:Copy  p:Paste  q:Quit"
         }
     }
 
@@ -246,6 +257,16 @@ impl VoicePanel {
                 KeyCode::Char('o') => self.cycle_osc(state, 1).into_iter().collect(),
                 KeyCode::Char('c') => { self.copy_voice(state); vec![] }
                 KeyCode::Char('p') => self.paste_voice(state),
+                KeyCode::Char('m') => {
+                    let v = self.selected_voice;
+                    let muted = !state.voices[v].muted;
+                    vec![ConfigCommand::MuteVoice { voice: v, muted }]
+                }
+                KeyCode::Char('s') => {
+                    let v = self.selected_voice;
+                    let soloed = !state.voices[v].soloed;
+                    vec![ConfigCommand::SoloVoice { voice: v, soloed }]
+                }
                 _ => vec![],
             }
         }

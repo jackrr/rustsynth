@@ -28,6 +28,8 @@ pub struct VoiceState {
     pub sub_osc_enabled: bool,
     pub sub_osc_octave: i32,
     pub sub_osc_level: f32,
+    pub muted: bool,
+    pub soloed: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +77,8 @@ impl Default for VoiceState {
             sub_osc_enabled: false,
             sub_osc_octave: -1,
             sub_osc_level: 0.5,
+            muted: false,
+            soloed: false,
         }
     }
 }
