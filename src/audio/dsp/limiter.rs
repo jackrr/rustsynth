@@ -12,7 +12,12 @@ impl Limiter {
         Limiter {
             threshold: 0.9,
             envelope: 0.0,
-            attack: 0.001,
+            // Attack must be near-instant: a slow attack lets sudden multi-voice
+            // transients (e.g. a sequencer step firing many voices at once) pass
+            // through un-reduced before the envelope catches up, so they clip
+            // downstream instead of being limited. Release stays slow so gain
+            // recovery doesn't pump audibly.
+            attack: 1.0,
             release: 0.1,
         }
     }

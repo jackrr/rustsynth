@@ -6,11 +6,29 @@ use crate::audio::effect_group::EffectGroup;
 use crate::audio::routing::RoutingMatrix;
 use crate::audio::sequencer::AudioSequencer;
 use crate::audio::voice::Voice;
-use crate::state::messages::{ConfigCommand, NoteCommand};
+use crate::state::messages::{ConfigCommand, EffectType, NoteCommand};
 use crate::state::synth_state::{
     EffectParamState, EffectState, EnvelopeParams, GroupState, SequencerSnapshot,
     SequencerStepSnapshot, SynthState, VoiceState,
 };
+
+fn group_state(group: &EffectGroup) -> GroupState {
+    let effects: Vec<EffectState> = group.effects.iter().map(|(et, e)| {
+        EffectState {
+            effect_type: *et,
+            name: e.name().to_string(),
+            params: e.get_parameters().into_iter().map(|p| EffectParamState {
+                name: p.name,
+                value: p.value,
+                min: p.min,
+                max: p.max,
+                labels: p.labels,
+                logarithmic: p.logarithmic,
+            }).collect(),
+        }
+    }).collect();
+    GroupState { enabled: group.enabled, effects }
+}
 
 const SCOPE_LEN: usize = 4096;
 
@@ -26,6 +44,7 @@ pub struct AudioEngine {
     channels: usize,
     scope_buf: Box<[f32; SCOPE_LEN]>,
     scope_idx: usize,
+    global_group: EffectGroup,
 }
 
 impl AudioEngine {
@@ -43,6 +62,8 @@ impl AudioEngine {
             EffectGroup::new("C", sample_rate),
             EffectGroup::new("D", sample_rate),
         ];
+        let mut global_group = EffectGroup::new("Global", sample_rate);
+        global_group.add_effect(EffectType::Limiter, 0);
         AudioEngine {
             voices,
             effect_groups,
@@ -55,6 +76,16 @@ impl AudioEngine {
             channels: channels.max(1),
             scope_buf: Box::new([0.0; SCOPE_LEN]),
             scope_idx: 0,
+            global_group,
+        }
+    }
+
+    /// Groups 0-3 are the send groups A-D; group 4 is the global bus.
+    fn effect_group_mut(&mut self, group: usize) -> Option<&mut EffectGroup> {
+        match group {
+            0..=3 => Some(&mut self.effect_groups[group]),
+            4 => Some(&mut self.global_group),
+            _ => None,
         }
     }
 
@@ -86,28 +117,33 @@ impl AudioEngine {
                 }
             }
             ConfigCommand::AddEffect { group, effect_type, position } => {
-                if group < 4 {
-                    self.effect_groups[group].add_effect(effect_type, position);
+                if let Some(g) = self.effect_group_mut(group) {
+                    g.add_effect(effect_type, position);
                 }
             }
             ConfigCommand::RemoveEffect { group, position } => {
-                if group < 4 {
-                    self.effect_groups[group].remove_effect(position);
+                if let Some(g) = self.effect_group_mut(group) {
+                    g.remove_effect(position);
+                }
+            }
+            ConfigCommand::ReorderEffect { group, from, to } => {
+                if let Some(g) = self.effect_group_mut(group) {
+                    g.move_effect(from, to);
                 }
             }
             ConfigCommand::SetEffectParam { group, effect_idx, param, value } => {
-                if group < 4 {
-                    self.effect_groups[group].set_effect_param(effect_idx, &param, value);
+                if let Some(g) = self.effect_group_mut(group) {
+                    g.set_effect_param(effect_idx, &param, value);
                 }
             }
             ConfigCommand::EnableGroup { group, enabled } => {
-                if group < 4 {
-                    self.effect_groups[group].enabled = enabled;
+                if let Some(g) = self.effect_group_mut(group) {
+                    g.enabled = enabled;
                 }
             }
             ConfigCommand::ClearGroup { group } => {
-                if group < 4 {
-                    self.effect_groups[group].clear();
+                if let Some(g) = self.effect_group_mut(group) {
+                    g.clear();
                 }
             }
             ConfigCommand::SetDefaultNote { voice, midi_note } => {
@@ -204,27 +240,8 @@ impl AudioEngine {
             }
         });
 
-        let groups: [GroupState; 4] = std::array::from_fn(|i| {
-            let group = &self.effect_groups[i];
-            let effects: Vec<EffectState> = group.effects.iter().map(|(et, e)| {
-                EffectState {
-                    effect_type: *et,
-                    name: e.name().to_string(),
-                    params: e.get_parameters().into_iter().map(|p| EffectParamState {
-                        name: p.name,
-                        value: p.value,
-                        min: p.min,
-                        max: p.max,
-                        labels: p.labels,
-                        logarithmic: p.logarithmic,
-                    }).collect(),
-                }
-            }).collect();
-            GroupState {
-                enabled: group.enabled,
-                effects,
-            }
-        });
+        let groups: [GroupState; 4] = std::array::from_fn(|i| group_state(&self.effect_groups[i]));
+        let global = group_state(&self.global_group);
 
         let routing: [[f32; 4]; 16] = std::array::from_fn(|v| {
             std::array::from_fn(|g| self.routing.get(v, g))
@@ -253,6 +270,7 @@ impl AudioEngine {
         let snapshot = Arc::new(SynthState {
             voices,
             groups,
+            global,
             routing,
             scope,
             seq,
@@ -296,7 +314,8 @@ impl AudioEngine {
                 final_mix += group.process(input);
             }
 
-            let out = (final_mix * 0.25).clamp(-1.0, 1.0);
+            // Master group (defaults to a Limiter) softens peaks instead of hard-clipping.
+            let out = self.global_group.process(final_mix * 0.25).clamp(-1.0, 1.0);
             *sample = out;
 
             // Capture pre-gain signal so scope shows full amplitude range

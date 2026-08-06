@@ -6,10 +6,10 @@ use crossbeam_channel::Sender;
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
 use ratatui::{
     Frame, Terminal,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, Paragraph, Tabs},
 };
 
 use crate::preset;
@@ -20,8 +20,18 @@ use crate::ui::mode::UIMode;
 use crate::ui::widgets::{
     fx_group_panel::FxGroupPanel,
     sequencer_panel::SequencerPanel,
-    voice_panel::VoicePanel,
+    voice_panel::{self, VoicePanel},
 };
+
+enum PathPromptMode {
+    Save,
+    Load,
+}
+
+struct PathPrompt {
+    mode: PathPromptMode,
+    input: String,
+}
 
 pub struct App {
     mode: UIMode,
@@ -34,6 +44,8 @@ pub struct App {
     udp_status: Arc<Mutex<UdpStatus>>,
     running: bool,
     status_msg: Option<(String, Instant)>,
+    path_prompt: Option<PathPrompt>,
+    last_path: String,
 }
 
 impl App {
@@ -54,6 +66,8 @@ impl App {
             udp_status,
             running: true,
             status_msg: None,
+            path_prompt: None,
+            last_path: "preset.json".to_string(),
         }
     }
 
@@ -90,6 +104,7 @@ impl App {
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(0),
+                Constraint::Length(10),
                 Constraint::Length(2),
             ])
             .split(frame.area());
@@ -102,7 +117,10 @@ impl App {
             UIMode::Sequencer => self.sequencer_panel.render(frame, chunks[1], state),
         }
 
-        self.render_status_bar(frame, chunks[2]);
+        voice_panel::render_oscilloscope(frame, chunks[2], &state.scope);
+        self.render_status_bar(frame, chunks[3]);
+
+        self.render_path_prompt(frame, frame.area());
     }
 
     fn render_header(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
@@ -167,7 +185,7 @@ impl App {
         } else {
             match self.mode {
                 UIMode::Voices    => self.voice_panel.help_text(),
-                UIMode::FxGroups  => "↑↓:Navigate effects  Enter:Edit params  a:Add effect  d:Delete  e:Toggle group  1/2/3:Page  q:Quit",
+                UIMode::FxGroups  => "↑↓:Navigate effects  Enter:Edit params  a:Add effect  d:Delete  </>:Reorder  e:Toggle group  1/2/3:Page  q:Quit",
                 UIMode::Sequencer => self.sequencer_panel.help_text(),
             }
         };
@@ -176,6 +194,12 @@ impl App {
     }
 
     fn handle_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
+        // Path prompt intercepts all keys when open
+        if self.path_prompt.is_some() {
+            self.handle_path_prompt_key(key);
+            return;
+        }
+
         // Picker intercepts all keys when open
         if self.mode == UIMode::FxGroups && self.fx_panel.show_picker {
             self.handle_picker_key(key, state);
@@ -187,28 +211,13 @@ impl App {
             return;
         }
 
-        let preset_path = std::path::Path::new("preset.json");
-
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
-            let msg = match preset::save(&state, preset_path) {
-                Ok(()) => format!("Saved preset to {}", preset_path.display()),
-                Err(e) => format!("Save failed: {e}"),
-            };
-            self.status_msg = Some((msg, Instant::now()));
+            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Save, input: self.last_path.clone() });
             return;
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
-            let msg = match preset::load(preset_path) {
-                Ok(cmds) => {
-                    for cmd in cmds {
-                        let _ = self.config_tx.try_send(cmd);
-                    }
-                    format!("Loaded preset from {}", preset_path.display())
-                }
-                Err(e) => format!("Load failed: {e}"),
-            };
-            self.status_msg = Some((msg, Instant::now()));
+            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Load, input: self.last_path.clone() });
             return;
         }
 
@@ -227,6 +236,53 @@ impl App {
         }
     }
 
+    fn handle_path_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
+        let Some(prompt) = self.path_prompt.as_mut() else { return };
+        match key.code {
+            KeyCode::Char(c) => prompt.input.push(c),
+            KeyCode::Backspace => { prompt.input.pop(); }
+            KeyCode::Esc => {
+                self.path_prompt = None;
+            }
+            KeyCode::Enter => {
+                let prompt = self.path_prompt.take().unwrap();
+                let path = std::path::Path::new(&prompt.input);
+                let msg = match prompt.mode {
+                    PathPromptMode::Save => match preset::save(&self.state.load_full(), path) {
+                        Ok(()) => format!("Saved preset to {}", path.display()),
+                        Err(e) => format!("Save failed: {e}"),
+                    },
+                    PathPromptMode::Load => match preset::load(path) {
+                        Ok(cmds) => {
+                            for cmd in cmds {
+                                let _ = self.config_tx.try_send(cmd);
+                            }
+                            format!("Loaded preset from {}", path.display())
+                        }
+                        Err(e) => format!("Load failed: {e}"),
+                    },
+                };
+                self.last_path = prompt.input;
+                self.status_msg = Some((msg, Instant::now()));
+            }
+            _ => {}
+        }
+    }
+
+    fn render_path_prompt(&self, frame: &mut Frame, area: Rect) {
+        let Some(ref prompt) = self.path_prompt else { return };
+        let popup = centered_rect(50, 15, area);
+        frame.render_widget(Clear, popup);
+        let title = match prompt.mode {
+            PathPromptMode::Save => "Save preset to path  (Enter:confirm  Esc:cancel)",
+            PathPromptMode::Load => "Load preset from path  (Enter:confirm  Esc:cancel)",
+        };
+        let p = Paragraph::new(format!("{}█", prompt.input))
+            .style(Style::default().fg(Color::Yellow))
+            .block(Block::default().title(title).borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
+        frame.render_widget(p, popup);
+    }
+
     fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
         let panel = &mut self.fx_panel;
         match key.code {
@@ -238,7 +294,7 @@ impl App {
             }
             KeyCode::Enter => {
                 let effect_type = panel.picker_selected_effect();
-                let position = state.groups[panel.selected_group].effects.len();
+                let position = group_ref(state, panel.selected_group).effects.len();
                 let _ = self.config_tx.try_send(ConfigCommand::AddEffect {
                     group: panel.selected_group,
                     effect_type,
@@ -282,7 +338,7 @@ impl App {
                     if panel.selected_param > 0 { panel.selected_param -= 1; }
                 }
                 KeyCode::Down => {
-                    let param_count = state.groups[panel.selected_group]
+                    let param_count = group_ref(state, panel.selected_group)
                         .effects.get(panel.selected_effect)
                         .map(|e| e.params.len()).unwrap_or(0);
                     if panel.selected_param + 1 < param_count {
@@ -304,20 +360,20 @@ impl App {
                     panel.selected_effect -= 1;
                 } else if panel.selected_group > 0 {
                     panel.selected_group -= 1;
-                    panel.selected_effect = state.groups[panel.selected_group].effects.len().saturating_sub(1);
+                    panel.selected_effect = group_ref(state, panel.selected_group).effects.len().saturating_sub(1);
                 }
             }
             KeyCode::Down => {
-                let effect_count = state.groups[panel.selected_group].effects.len();
+                let effect_count = group_ref(state, panel.selected_group).effects.len();
                 if panel.selected_effect + 1 < effect_count {
                     panel.selected_effect += 1;
-                } else if panel.selected_group < 3 {
+                } else if panel.selected_group < 4 {
                     panel.selected_group += 1;
                     panel.selected_effect = 0;
                 }
             }
             KeyCode::Enter => {
-                let has_params = state.groups[panel.selected_group]
+                let has_params = group_ref(state, panel.selected_group)
                     .effects.get(panel.selected_effect)
                     .map(|e| !e.params.is_empty()).unwrap_or(false);
                 if has_params {
@@ -326,7 +382,7 @@ impl App {
                 }
             }
             KeyCode::Char('e') => {
-                let enabled = !state.groups[panel.selected_group].enabled;
+                let enabled = !group_ref(state, panel.selected_group).enabled;
                 let _ = self.config_tx.try_send(ConfigCommand::EnableGroup {
                     group: panel.selected_group, enabled,
                 });
@@ -336,7 +392,7 @@ impl App {
                 panel.picker_selection = 0;
             }
             KeyCode::Char('d') => {
-                if !state.groups[panel.selected_group].effects.is_empty() {
+                if !group_ref(state, panel.selected_group).effects.is_empty() {
                     let _ = self.config_tx.try_send(ConfigCommand::RemoveEffect {
                         group: panel.selected_group,
                         position: panel.selected_effect,
@@ -345,13 +401,35 @@ impl App {
                     panel.selected_param = 0;
                 }
             }
+            KeyCode::Char('<') => {
+                let effect_count = group_ref(state, panel.selected_group).effects.len();
+                if panel.selected_effect > 0 && effect_count > 1 {
+                    let _ = self.config_tx.try_send(ConfigCommand::ReorderEffect {
+                        group: panel.selected_group,
+                        from: panel.selected_effect,
+                        to: panel.selected_effect - 1,
+                    });
+                    panel.selected_effect -= 1;
+                }
+            }
+            KeyCode::Char('>') => {
+                let effect_count = group_ref(state, panel.selected_group).effects.len();
+                if panel.selected_effect + 1 < effect_count {
+                    let _ = self.config_tx.try_send(ConfigCommand::ReorderEffect {
+                        group: panel.selected_group,
+                        from: panel.selected_effect,
+                        to: panel.selected_effect + 1,
+                    });
+                    panel.selected_effect += 1;
+                }
+            }
             _ => {}
         }
     }
 
     fn adjust_fx_param(&self, state: &SynthState, dir: i32, fine: bool) {
         let panel = &self.fx_panel;
-        let group = &state.groups[panel.selected_group];
+        let group = group_ref(state, panel.selected_group);
         if let Some(effect) = group.effects.get(panel.selected_effect) {
             if let Some(param) = effect.params.get(panel.selected_param) {
                 let new_value = if param.labels.is_some() {
@@ -380,8 +458,45 @@ impl App {
     }
 
     fn handle_sequencer_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
-        for cmd in self.sequencer_panel.handle_key(key, state) {
+        let cmds = self.sequencer_panel.handle_key(key, state);
+        // Single-step edits (not bulk copy/paste) get an audible preview.
+        if let [ConfigCommand::SeqSetStep { voice, enabled: true, midi_note, velocity, .. }] = cmds.as_slice() {
+            let _ = self.note_tx.try_send(NoteCommand {
+                channel: *voice,
+                midi_note: *midi_note,
+                velocity: *velocity,
+                length_samples: 12000, // ~0.25s at 48kHz
+                detune_cents: 0.0,
+            });
+        }
+        for cmd in cmds {
             let _ = self.config_tx.try_send(cmd);
         }
     }
+}
+
+/// Groups 0-3 are the send groups A-D; group 4 is the global bus.
+fn group_ref(state: &SynthState, group: usize) -> &crate::state::synth_state::GroupState {
+    if group < 4 { &state.groups[group] } else { &state.global }
+}
+
+/// Returns a centered rect of `percent_x` × `percent_y` within `r`
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(layout[1])[1]
 }

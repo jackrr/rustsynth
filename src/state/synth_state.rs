@@ -95,6 +95,7 @@ pub struct GroupState {
 pub struct SynthState {
     pub voices: [VoiceState; 16],
     pub groups: [GroupState; 4],
+    pub global: GroupState,
     pub routing: [[f32; 4]; 16],
     /// Recent output samples for oscilloscope display (oldest → newest)
     pub scope: Vec<f32>,
@@ -131,6 +132,7 @@ impl Default for SynthState {
         SynthState {
             voices: std::array::from_fn(|_| VoiceState::default()),
             groups: std::array::from_fn(|_| GroupState::default()),
+            global: GroupState::default(),
             routing: [[0.0; 4]; 16],
             scope: vec![0.0; 4096],
             seq: SequencerSnapshot::default(),

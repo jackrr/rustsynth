@@ -63,7 +63,9 @@ impl Preset {
             default_velocity: v.default_velocity,
         }).collect();
 
-        let groups = state.groups.iter().map(|g| GroupPreset {
+        // Global (index 4) is appended after groups A-D (0-3), matching the
+        // group-index convention used by ConfigCommand::*Effect variants.
+        let groups = state.groups.iter().chain(std::iter::once(&state.global)).map(|g| GroupPreset {
             enabled: g.enabled,
             effects: g.effects.iter().map(|e| EffectPreset {
                 effect_type: e.effect_type,

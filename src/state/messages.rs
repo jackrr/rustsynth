@@ -22,6 +22,7 @@ pub enum ConfigCommand {
     SetSendLevel { voice: usize, group: usize, level: f32 },
     AddEffect { group: usize, effect_type: EffectType, position: usize },
     RemoveEffect { group: usize, position: usize },
+    ReorderEffect { group: usize, from: usize, to: usize },
     SetEffectParam { group: usize, effect_idx: usize, param: String, value: f32 },
     EnableGroup { group: usize, enabled: bool },
     SeqPlay,
