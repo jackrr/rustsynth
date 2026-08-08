@@ -131,9 +131,14 @@ pub fn parse_command(input: &str, sample_rate: f32) -> Option<NoteCommand> {
 
     // Optional length (5th char). Also kept as a raw 0-35 digit (`length_units`) for voices
     // playing a sample, where it's interpreted as a fraction of the sample's length instead.
-    let length_char = if chars.len() > 4 { chars[4] } else { '4' }; // default: 1/16 bar
-    let length_samples = parse_length(length_char, sample_rate);
-    let length_units = parse_base36(length_char).unwrap_or(4);
+    let explicit_length_char = if chars.len() > 4 { Some(chars[4]) } else { None };
+    let length_samples = parse_length(explicit_length_char.unwrap_or('4'), sample_rate); // default: 1/16 bar
+    // With no explicit digit, sample-mode voices should play the whole sample (matching the
+    // TUI's own preview triggers) rather than inheriting the oscillator's short bar-fraction default.
+    let length_units = match explicit_length_char {
+        Some(c) => parse_base36(c).unwrap_or(4),
+        None => 35,
+    };
 
     // Optional note offset (6th char)
     let note_offset = if chars.len() > 5 {
