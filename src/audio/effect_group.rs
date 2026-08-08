@@ -39,6 +39,13 @@ impl EffectGroup {
         }
     }
 
+    pub fn move_effect(&mut self, from: usize, to: usize) {
+        if from < self.effects.len() && to < self.effects.len() {
+            let effect = self.effects.remove(from);
+            self.effects.insert(to, effect);
+        }
+    }
+
     pub fn clear(&mut self) {
         self.effects.clear();
     }

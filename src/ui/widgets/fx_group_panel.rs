@@ -60,24 +60,28 @@ impl FxGroupPanel {
 
     fn render_groups(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
         // Give the selected group a bit more vertical space for its inline param row
-        let constraints: Vec<Constraint> = (0..4).map(|i| {
-            if i == self.selected_group { Constraint::Ratio(2, 5) } else { Constraint::Ratio(1, 5) }
+        let constraints: Vec<Constraint> = (0..5).map(|i| {
+            if i == self.selected_group { Constraint::Ratio(2, 6) } else { Constraint::Ratio(1, 6) }
         }).collect();
         let group_areas = Layout::default()
             .direction(Direction::Vertical)
             .constraints(constraints)
             .split(area);
 
-        let group_names = ["A", "B", "C", "D"];
-        for (i, group) in state.groups.iter().enumerate() {
+        let group_names = ["A", "B", "C", "D", "Global"];
+        let all_groups: [&crate::state::synth_state::GroupState; 5] = [
+            &state.groups[0], &state.groups[1], &state.groups[2], &state.groups[3], &state.global,
+        ];
+        for (i, group) in all_groups.into_iter().enumerate() {
             let is_selected = i == self.selected_group;
             let status = if group.enabled { "On" } else { "Off" };
             let hint = if is_selected && self.editing {
                 "  [EDITING — ↑↓:param  ←→:adjust  Enter/Esc:done]"
             } else if is_selected {
-                "  [↑↓:effect  Enter:edit  a:add  d:del  e:toggle]"
+                "  [↑↓:effect  Enter:edit  a:add  d:del  </>:reorder  e:toggle]"
             } else { "" };
-            let title = format!("Group {} [{}]{}", group_names[i], status, hint);
+            let group_label = if i == 4 { "Global".to_string() } else { format!("Group {}", group_names[i]) };
+            let title = format!("{} [{}]{}", group_label, status, hint);
 
             let items: Vec<ListItem> = group.effects.iter().enumerate().map(|(j, e)| {
                 let is_effect_selected = is_selected && j == self.selected_effect;

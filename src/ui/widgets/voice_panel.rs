@@ -168,11 +168,6 @@ impl VoicePanel {
     fn render_voice_detail(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
         let voice = &state.voices[self.selected_voice];
 
-        let rows = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([Constraint::Min(8), Constraint::Length(10)])
-            .split(area);
-
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
@@ -180,7 +175,7 @@ impl VoicePanel {
                 Constraint::Percentage(57),  // adsr shape
                 Constraint::Percentage(23),  // sends
             ])
-            .split(rows[0]);
+            .split(area);
 
         // --- Left: stacked Osc + Sub + Env params ---
         render_params_panel(
@@ -219,8 +214,6 @@ impl VoicePanel {
                 if sends_focused { Style::default().fg(Color::Yellow) } else { Style::default() }
             ));
         frame.render_widget(sends_list, chunks[2]);
-
-        render_oscilloscope(frame, rows[1], &state.scope);
     }
 
     pub fn help_text(&self) -> &str {
@@ -377,7 +370,7 @@ impl VoicePanel {
     }
 }
 
-fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
+pub fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
     let block = Block::default().title("Oscilloscope").borders(Borders::ALL);
     let inner = block.inner(area);
     frame.render_widget(block, area);
