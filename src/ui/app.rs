@@ -45,7 +45,8 @@ pub struct App {
     running: bool,
     status_msg: Option<(String, Instant)>,
     path_prompt: Option<PathPrompt>,
-    last_path: String,
+    last_filename: String,
+    preset_dir: std::path::PathBuf,
 }
 
 impl App {
@@ -54,6 +55,7 @@ impl App {
         config_tx: Sender<ConfigCommand>,
         note_tx: Sender<NoteCommand>,
         udp_status: Arc<Mutex<UdpStatus>>,
+        preset_dir: std::path::PathBuf,
     ) -> Self {
         App {
             mode: UIMode::Voices,
@@ -67,8 +69,23 @@ impl App {
             running: true,
             status_msg: None,
             path_prompt: None,
-            last_path: "preset.json".to_string(),
+            last_filename: "preset.json".to_string(),
+            preset_dir,
         }
+    }
+
+    fn preset_files(&self) -> Vec<String> {
+        let mut files: Vec<String> = std::fs::read_dir(&self.preset_dir)
+            .map(|entries| {
+                entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_file())
+                    .filter_map(|e| e.file_name().into_string().ok())
+                    .collect()
+            })
+            .unwrap_or_default();
+        files.sort();
+        files
     }
 
     pub fn run<B: ratatui::backend::Backend>(&mut self, terminal: &mut Terminal<B>) -> anyhow::Result<()> {
@@ -212,12 +229,12 @@ impl App {
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
-            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Save, input: self.last_path.clone() });
+            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Save, input: self.last_filename.clone() });
             return;
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
-            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Load, input: self.last_path.clone() });
+            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Load, input: self.last_filename.clone() });
             return;
         }
 
@@ -246,13 +263,13 @@ impl App {
             }
             KeyCode::Enter => {
                 let prompt = self.path_prompt.take().unwrap();
-                let path = std::path::Path::new(&prompt.input);
+                let path = self.preset_dir.join(&prompt.input);
                 let msg = match prompt.mode {
-                    PathPromptMode::Save => match preset::save(&self.state.load_full(), path) {
+                    PathPromptMode::Save => match preset::save(&self.state.load_full(), &path) {
                         Ok(()) => format!("Saved preset to {}", path.display()),
                         Err(e) => format!("Save failed: {e}"),
                     },
-                    PathPromptMode::Load => match preset::load(path) {
+                    PathPromptMode::Load => match preset::load(&path) {
                         Ok(cmds) => {
                             for cmd in cmds {
                                 let _ = self.config_tx.try_send(cmd);
@@ -262,7 +279,7 @@ impl App {
                         Err(e) => format!("Load failed: {e}"),
                     },
                 };
-                self.last_path = prompt.input;
+                self.last_filename = prompt.input;
                 self.status_msg = Some((msg, Instant::now()));
             }
             _ => {}
@@ -271,16 +288,38 @@ impl App {
 
     fn render_path_prompt(&self, frame: &mut Frame, area: Rect) {
         let Some(ref prompt) = self.path_prompt else { return };
-        let popup = centered_rect(50, 15, area);
+        let popup = centered_rect(50, 40, area);
         frame.render_widget(Clear, popup);
         let title = match prompt.mode {
-            PathPromptMode::Save => "Save preset to path  (Enter:confirm  Esc:cancel)",
-            PathPromptMode::Load => "Load preset from path  (Enter:confirm  Esc:cancel)",
+            PathPromptMode::Save => "Save preset as  (Enter:confirm  Esc:cancel)",
+            PathPromptMode::Load => "Load preset  (Enter:confirm  Esc:cancel)",
         };
-        let p = Paragraph::new(format!("{}█", prompt.input))
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
+            .split(popup);
+
+        let input = Paragraph::new(format!("{}█", prompt.input))
             .style(Style::default().fg(Color::Yellow))
             .block(Block::default().title(title).borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
-        frame.render_widget(p, popup);
+        frame.render_widget(input, chunks[0]);
+
+        let files = self.preset_files();
+        let list_text = if files.is_empty() {
+            format!("(no presets in {})", self.preset_dir.display())
+        } else {
+            files.join("\n")
+        };
+        let list = Paragraph::new(list_text)
+            .style(Style::default().fg(Color::Gray))
+            .block(
+                Block::default()
+                    .title(format!("Files in {}", self.preset_dir.display()))
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan)),
+            );
+        frame.render_widget(list, chunks[1]);
     }
 
     fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
