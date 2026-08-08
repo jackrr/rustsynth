@@ -1,7 +1,9 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
+use crate::audio::sample::load_wav;
 use crate::state::messages::{ConfigCommand, EffectType, OscillatorType};
 use crate::state::synth_state::SynthState;
 
@@ -22,7 +24,17 @@ pub struct VoicePreset {
     release: f32,
     default_midi_note: u8,
     default_velocity: f32,
+    #[serde(default)]
+    sample_name: Option<String>,
+    #[serde(default)]
+    sample_root_note: Option<u8>,
+    #[serde(default)]
+    use_sample: bool,
+    #[serde(default = "default_sample_level")]
+    sample_level: f32,
 }
+
+fn default_sample_level() -> f32 { 1.0 }
 
 #[derive(Serialize, Deserialize)]
 pub struct EffectPreset {
@@ -61,6 +73,10 @@ impl Preset {
             release: v.envelope.release,
             default_midi_note: v.default_midi_note,
             default_velocity: v.default_velocity,
+            sample_name: v.sample_name.clone(),
+            sample_root_note: v.sample_name.as_ref().map(|_| v.sample_root_note),
+            use_sample: v.use_sample,
+            sample_level: v.sample_level,
         }).collect();
 
         // Global (index 4) is appended after groups A-D (0-3), matching the
@@ -102,7 +118,10 @@ impl Preset {
         }
     }
 
-    pub fn to_commands(&self) -> Vec<ConfigCommand> {
+    /// Convert to config commands, decoding any referenced sample files from `sample_dir`.
+    /// A sample that fails to load (missing/invalid file) is skipped rather than failing
+    /// the whole preset load.
+    pub fn to_commands(&self, sample_dir: &Path) -> Vec<ConfigCommand> {
         let mut cmds = Vec::new();
 
         for (i, v) in self.voices.iter().enumerate() {
@@ -116,6 +135,19 @@ impl Preset {
                 sustain: v.sustain,
                 release: v.release,
             });
+            cmds.push(ConfigCommand::ClearSample { voice: i });
+            if let Some(ref name) = v.sample_name
+                && let Ok(sample) = load_wav(&sample_dir.join(name))
+            {
+                cmds.push(ConfigCommand::LoadSample {
+                    voice: i,
+                    sample: Arc::new(sample),
+                    name: name.clone(),
+                    root_note: v.sample_root_note.unwrap_or(60),
+                });
+                cmds.push(ConfigCommand::SetSampleMode { voice: i, use_sample: v.use_sample });
+                cmds.push(ConfigCommand::SetSampleLevel { voice: i, level: v.sample_level });
+            }
         }
 
         for (g, group) in self.groups.iter().enumerate() {
@@ -184,8 +216,8 @@ pub fn save(state: &SynthState, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn load(path: &Path) -> anyhow::Result<Vec<ConfigCommand>> {
+pub fn load(path: &Path, sample_dir: &Path) -> anyhow::Result<Vec<ConfigCommand>> {
     let json = std::fs::read_to_string(path)?;
     let preset: Preset = serde_json::from_str(&json)?;
-    Ok(preset.to_commands())
+    Ok(preset.to_commands(sample_dir))
 }

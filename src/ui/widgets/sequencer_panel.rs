@@ -163,16 +163,11 @@ impl SequencerPanel {
             } else {
                 // Show the voice default note from SynthState
                 let note = state.voices[v].default_midi_note;
-                format!("{}", midi_note_name(note))
+                midi_note_name(note)
             };
             cells.push(Cell::from(info).style(Style::default().fg(Color::Gray)));
 
-            let row_style = if v == self.selected_voice {
-                Style::default()
-            } else {
-                Style::default()
-            };
-            Row::new(cells).style(row_style)
+            Row::new(cells).style(Style::default())
         }).collect();
 
         // Build column constraints: voice header (4), step_count * 2-char cols, info col
@@ -333,13 +328,13 @@ impl SequencerPanel {
             }
             KeyCode::Char('v') => {
                 if let Some(cb) = self.clipboard {
-                    for s in 0..16 {
+                    for (s, step) in cb.iter().enumerate() {
                         cmds.push(ConfigCommand::SeqSetStep {
                             voice: self.selected_voice,
                             step: s,
-                            enabled: cb[s].enabled,
-                            midi_note: cb[s].midi_note,
-                            velocity: cb[s].velocity,
+                            enabled: step.enabled,
+                            midi_note: step.midi_note,
+                            velocity: step.velocity,
                         });
                     }
                 }

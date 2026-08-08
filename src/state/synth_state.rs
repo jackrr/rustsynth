@@ -1,4 +1,6 @@
-use crate::state::messages::{EffectType, OscillatorType};
+use std::sync::Arc;
+
+use crate::state::messages::{EffectType, OscillatorType, SampleData};
 
 #[derive(Debug, Clone, Copy)]
 pub struct SequencerStepSnapshot {
@@ -66,6 +68,13 @@ pub struct VoiceState {
     pub sub_osc_level: f32,
     pub muted: bool,
     pub soloed: bool,
+    pub sample_name: Option<String>,
+    pub use_sample: bool,
+    pub sample_root_note: u8,
+    pub sample_level: f32,
+    /// The loaded sample's decoded audio, cheap to clone (Arc); carried in the snapshot so the
+    /// TUI can copy/paste a voice's sample assignment without re-decoding the file.
+    pub sample: Option<Arc<SampleData>>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,6 +126,11 @@ impl Default for VoiceState {
             sub_osc_level: 0.5,
             muted: false,
             soloed: false,
+            sample_name: None,
+            use_sample: false,
+            sample_root_note: 60,
+            sample_level: 1.0,
+            sample: None,
         }
     }
 }

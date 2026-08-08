@@ -1,10 +1,22 @@
+/// Decoded audio sample data, shared read-only across voices/threads.
+#[derive(Debug)]
+pub struct SampleData {
+    pub samples: Vec<f32>, // mono
+    pub sample_rate: f32,
+}
+
 /// A note-on command from UDP
 #[derive(Debug, Clone)]
 pub struct NoteCommand {
     pub channel: usize,    // 0-15
     pub midi_note: u8,     // MIDI note number
     pub velocity: f32,     // 0.0-1.0
-    pub length_samples: u64, // Duration in samples before auto-release
+    /// Duration in samples before auto-release, used when the voice is playing its oscillator.
+    pub length_samples: u64,
+    /// Raw base-36 length digit (0-35). When the voice is playing a loaded sample instead of
+    /// its oscillator, this is interpreted as a fraction of the sample's total playback length
+    /// ((length_units + 1) / 36) rather than `length_samples`.
+    pub length_units: u8,
     pub detune_cents: f32, // -100.0 to +100.0 cents (0 = no detune)
 }
 
@@ -16,6 +28,11 @@ pub enum ConfigCommand {
     SetDefaultNote { voice: usize, midi_note: u8 },
     SetDefaultVelocity { voice: usize, velocity: f32 },
     SetSubOsc { voice: usize, enabled: bool, octave: i32, level: f32 },
+    LoadSample { voice: usize, sample: std::sync::Arc<SampleData>, name: String, root_note: u8 },
+    ClearSample { voice: usize },
+    SetSampleMode { voice: usize, use_sample: bool },
+    SetSampleRootNote { voice: usize, root_note: u8 },
+    SetSampleLevel { voice: usize, level: f32 },
     MuteVoice { voice: usize, muted: bool },
     SoloVoice { voice: usize, soloed: bool },
     SetEnvelope { voice: usize, attack: f32, decay: f32, sustain: f32, release: f32 },
@@ -25,7 +42,6 @@ pub enum ConfigCommand {
     ReorderEffect { group: usize, from: usize, to: usize },
     SetEffectParam { group: usize, effect_idx: usize, param: String, value: f32 },
     EnableGroup { group: usize, enabled: bool },
-    SeqPlay,
     SeqStop,
     SeqTogglePlay,
     SeqSetBpm { bpm: f32 },
@@ -33,7 +49,6 @@ pub enum ConfigCommand {
     SeqSetSwing { swing: f32 },
     SeqSetStep { voice: usize, step: usize, enabled: bool, midi_note: u8, velocity: f32 },
     SeqClearRow { voice: usize },
-    SeqCopyRow { src_voice: usize, dst_voice: usize },
     SeqClearAll,
 }
 

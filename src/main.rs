@@ -27,6 +27,12 @@ fn main() -> anyhow::Result<()> {
         .unwrap_or_else(|| std::path::PathBuf::from("./preset"));
     std::fs::create_dir_all(&preset_dir)?;
 
+    let sample_dir = std::env::args()
+        .nth(2)
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("./samples"));
+    std::fs::create_dir_all(&sample_dir)?;
+
     let (note_tx, note_rx) = bounded::<NoteCommand>(256);
     let (config_tx, config_rx) = bounded::<ConfigCommand>(256);
 
@@ -84,7 +90,7 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(state_for_tui, config_tx, note_tx, udp_status_for_app, preset_dir);
+    let mut app = App::new(state_for_tui, config_tx, note_tx, udp_status_for_app, preset_dir, sample_dir);
     let result = app.run(&mut terminal);
 
     disable_raw_mode()?;

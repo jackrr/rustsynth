@@ -34,7 +34,7 @@ impl Effect for Distortion {
             DistortionType::Foldback => {
                 // Foldback distortion
                 let mut s = driven;
-                while s > 1.0 || s < -1.0 {
+                while !(-1.0..=1.0).contains(&s) {
                     if s > 1.0 { s = 2.0 - s; }
                     if s < -1.0 { s = -2.0 - s; }
                 }

@@ -161,6 +161,31 @@ impl AudioEngine {
                     self.voices[voice].set_sub_osc(enabled, octave, level);
                 }
             }
+            ConfigCommand::LoadSample { voice, sample, name, root_note } => {
+                if voice < 16 {
+                    self.voices[voice].load_sample(sample, name, root_note);
+                }
+            }
+            ConfigCommand::ClearSample { voice } => {
+                if voice < 16 {
+                    self.voices[voice].clear_sample();
+                }
+            }
+            ConfigCommand::SetSampleMode { voice, use_sample } => {
+                if voice < 16 {
+                    self.voices[voice].set_sample_mode(use_sample);
+                }
+            }
+            ConfigCommand::SetSampleRootNote { voice, root_note } => {
+                if voice < 16 {
+                    self.voices[voice].set_sample_root_note(root_note);
+                }
+            }
+            ConfigCommand::SetSampleLevel { voice, level } => {
+                if voice < 16 {
+                    self.voices[voice].set_sample_level(level);
+                }
+            }
             ConfigCommand::MuteVoice { voice, muted } => {
                 if voice < 16 {
                     self.voices[voice].muted = muted;
@@ -170,9 +195,6 @@ impl AudioEngine {
                 if voice < 16 {
                     self.voices[voice].soloed = soloed;
                 }
-            }
-            ConfigCommand::SeqPlay => {
-                self.sequencer.pattern.playing = true;
             }
             ConfigCommand::SeqStop => {
                 self.sequencer.stop();
@@ -199,11 +221,6 @@ impl AudioEngine {
                     for s in &mut self.sequencer.pattern.steps[voice] {
                         s.enabled = false;
                     }
-                }
-            }
-            ConfigCommand::SeqCopyRow { src_voice, dst_voice } => {
-                if src_voice < 16 && dst_voice < 16 {
-                    self.sequencer.pattern.steps[dst_voice] = self.sequencer.pattern.steps[src_voice];
                 }
             }
             ConfigCommand::SeqClearAll => {
@@ -237,6 +254,11 @@ impl AudioEngine {
                 sub_osc_level: self.voices[i].sub_osc_level,
                 muted: self.voices[i].muted,
                 soloed: self.voices[i].soloed,
+                sample_name: self.voices[i].sample_name.clone(),
+                use_sample: self.voices[i].use_sample,
+                sample_root_note: self.voices[i].sample_root_note,
+                sample_level: self.voices[i].sample_level,
+                sample: self.voices[i].sample.clone(),
             }
         });
 

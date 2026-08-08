@@ -68,7 +68,7 @@ fn note_to_midi(octave: u8, note_char: char, note_offset: i32) -> Option<u8> {
     // MIDI note for C4 = 60; Pilot octave 4, C = MIDI 60
     // MIDI = (octave + 1) * 12 + semitone_from_c + offset
     let midi = (octave as i32 + 1) * 12 + semitone + note_offset;
-    if midi >= 0 && midi <= 127 {
+    if (0..=127).contains(&midi) {
         Some(midi as u8)
     } else {
         None
@@ -129,12 +129,11 @@ pub fn parse_command(input: &str, sample_rate: f32) -> Option<NoteCommand> {
         0.5  // default: half velocity
     };
 
-    // Optional length (5th char)
-    let length_samples = if chars.len() > 4 {
-        parse_length(chars[4], sample_rate)
-    } else {
-        parse_length('4', sample_rate)  // default: 1/16 bar
-    };
+    // Optional length (5th char). Also kept as a raw 0-35 digit (`length_units`) for voices
+    // playing a sample, where it's interpreted as a fraction of the sample's length instead.
+    let length_char = if chars.len() > 4 { chars[4] } else { '4' }; // default: 1/16 bar
+    let length_samples = parse_length(length_char, sample_rate);
+    let length_units = parse_base36(length_char).unwrap_or(4);
 
     // Optional note offset (6th char)
     let note_offset = if chars.len() > 5 {
@@ -158,6 +157,7 @@ pub fn parse_command(input: &str, sample_rate: f32) -> Option<NoteCommand> {
         midi_note,
         velocity,
         length_samples,
+        length_units,
         detune_cents,
     })
 }

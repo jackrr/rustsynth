@@ -94,10 +94,10 @@ impl AudioSequencer {
 
     fn fire_step(&self, voices: &mut [Voice; 16], step: usize) {
         let gate_samples = (self.samples_per_step() * 0.8) as u64;
-        for voice_idx in 0..16 {
-            let s = &self.pattern.steps[voice_idx][step];
+        for (row, voice) in self.pattern.steps.iter().zip(voices.iter_mut()) {
+            let s = &row[step];
             if s.enabled {
-                voices[voice_idx].note_on_raw(s.midi_note, s.velocity, gate_samples);
+                voice.note_on_raw(s.midi_note, s.velocity, gate_samples);
             }
         }
     }
