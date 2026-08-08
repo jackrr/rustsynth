@@ -42,9 +42,8 @@ impl Effect for Limiter {
     }
 
     fn set_parameter(&mut self, param_name: &str, value: f32) {
-        match param_name {
-            "threshold" => self.threshold = value.clamp(0.1, 1.0),
-            _ => {}
+        if param_name == "threshold" {
+            self.threshold = value.clamp(0.1, 1.0);
         }
     }
 

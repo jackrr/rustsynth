@@ -8,8 +8,8 @@ impl RoutingMatrix {
     pub fn new() -> Self {
         let mut levels = [[0.0_f32; 4]; 16];
         // Default: all voices send 100% to group A
-        for i in 0..16 {
-            levels[i][0] = 1.0;
+        for row in &mut levels {
+            row[0] = 1.0;
         }
         RoutingMatrix { levels }
     }

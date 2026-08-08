@@ -9,7 +9,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Tabs},
+    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs},
 };
 
 use crate::preset;
@@ -26,11 +26,14 @@ use crate::ui::widgets::{
 enum PathPromptMode {
     Save,
     Load,
+    LoadSample { voice: usize },
 }
 
 struct PathPrompt {
     mode: PathPromptMode,
     input: String,
+    /// Index into the current directory's file listing, when navigating by arrow key.
+    selected: Option<usize>,
 }
 
 pub struct App {
@@ -46,7 +49,9 @@ pub struct App {
     status_msg: Option<(String, Instant)>,
     path_prompt: Option<PathPrompt>,
     last_filename: String,
+    last_sample_filename: String,
     preset_dir: std::path::PathBuf,
+    sample_dir: std::path::PathBuf,
 }
 
 impl App {
@@ -56,6 +61,7 @@ impl App {
         note_tx: Sender<NoteCommand>,
         udp_status: Arc<Mutex<UdpStatus>>,
         preset_dir: std::path::PathBuf,
+        sample_dir: std::path::PathBuf,
     ) -> Self {
         App {
             mode: UIMode::Voices,
@@ -70,22 +76,18 @@ impl App {
             status_msg: None,
             path_prompt: None,
             last_filename: "preset.json".to_string(),
+            last_sample_filename: String::new(),
             preset_dir,
+            sample_dir,
         }
     }
 
-    fn preset_files(&self) -> Vec<String> {
-        let mut files: Vec<String> = std::fs::read_dir(&self.preset_dir)
-            .map(|entries| {
-                entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_file())
-                    .filter_map(|e| e.file_name().into_string().ok())
-                    .collect()
-            })
-            .unwrap_or_default();
-        files.sort();
-        files
+    /// Directory the currently open path prompt lists/loads/saves files in.
+    fn prompt_dir(&self) -> &std::path::Path {
+        match self.path_prompt.as_ref().map(|p| &p.mode) {
+            Some(PathPromptMode::LoadSample { .. }) => &self.sample_dir,
+            _ => &self.preset_dir,
+        }
     }
 
     pub fn run<B: ratatui::backend::Backend>(&mut self, terminal: &mut Terminal<B>) -> anyhow::Result<()> {
@@ -96,20 +98,20 @@ impl App {
             let state = self.state.load_full();
 
             // Expire status message after 2 seconds
-            if let Some((_, ts)) = self.status_msg {
-                if ts.elapsed() > Duration::from_secs(2) {
-                    self.status_msg = None;
-                }
+            if let Some((_, ts)) = self.status_msg
+                && ts.elapsed() > Duration::from_secs(2)
+            {
+                self.status_msg = None;
             }
 
             terminal.draw(|f| self.render(f, &state))?;
 
             let elapsed = frame_start.elapsed();
             let remaining = frame_duration.saturating_sub(elapsed);
-            if event::poll(remaining)? {
-                if let Event::Key(key) = event::read()? {
-                    self.handle_key(key, &state);
-                }
+            if event::poll(remaining)?
+                && let Event::Key(key) = event::read()?
+            {
+                self.handle_key(key, &state);
             }
         }
         Ok(())
@@ -229,12 +231,12 @@ impl App {
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
-            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Save, input: self.last_filename.clone() });
+            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Save, input: self.last_filename.clone(), selected: None });
             return;
         }
 
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
-            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Load, input: self.last_filename.clone() });
+            self.path_prompt = Some(PathPrompt { mode: PathPromptMode::Load, input: self.last_filename.clone(), selected: None });
             return;
         }
 
@@ -254,32 +256,79 @@ impl App {
     }
 
     fn handle_path_prompt_key(&mut self, key: crossterm::event::KeyEvent) {
-        let Some(prompt) = self.path_prompt.as_mut() else { return };
+        if self.path_prompt.is_none() { return; }
         match key.code {
-            KeyCode::Char(c) => prompt.input.push(c),
-            KeyCode::Backspace => { prompt.input.pop(); }
+            KeyCode::Char(c) => {
+                let prompt = self.path_prompt.as_mut().unwrap();
+                prompt.input.push(c);
+                prompt.selected = None;
+            }
+            KeyCode::Backspace => {
+                let prompt = self.path_prompt.as_mut().unwrap();
+                prompt.input.pop();
+                prompt.selected = None;
+            }
+            KeyCode::Up | KeyCode::Down => {
+                let files = list_files(self.prompt_dir());
+                let prompt = self.path_prompt.as_mut().unwrap();
+                if !files.is_empty() {
+                    let next = match prompt.selected {
+                        Some(i) if key.code == KeyCode::Up => i.saturating_sub(1),
+                        Some(i) => (i + 1).min(files.len() - 1),
+                        None => 0,
+                    };
+                    prompt.input = files[next].clone();
+                    prompt.selected = Some(next);
+                }
+            }
             KeyCode::Esc => {
                 self.path_prompt = None;
             }
             KeyCode::Enter => {
                 let prompt = self.path_prompt.take().unwrap();
-                let path = self.preset_dir.join(&prompt.input);
                 let msg = match prompt.mode {
-                    PathPromptMode::Save => match preset::save(&self.state.load_full(), &path) {
-                        Ok(()) => format!("Saved preset to {}", path.display()),
-                        Err(e) => format!("Save failed: {e}"),
-                    },
-                    PathPromptMode::Load => match preset::load(&path) {
-                        Ok(cmds) => {
-                            for cmd in cmds {
-                                let _ = self.config_tx.try_send(cmd);
+                    PathPromptMode::Save => {
+                        let path = self.preset_dir.join(&prompt.input);
+                        let result = match preset::save(&self.state.load_full(), &path) {
+                            Ok(()) => format!("Saved preset to {}", path.display()),
+                            Err(e) => format!("Save failed: {e}"),
+                        };
+                        self.last_filename = prompt.input;
+                        result
+                    }
+                    PathPromptMode::Load => {
+                        let path = self.preset_dir.join(&prompt.input);
+                        let result = match preset::load(&path, &self.sample_dir) {
+                            Ok(cmds) => {
+                                for cmd in cmds {
+                                    let _ = self.config_tx.try_send(cmd);
+                                }
+                                format!("Loaded preset from {}", path.display())
                             }
-                            format!("Loaded preset from {}", path.display())
-                        }
-                        Err(e) => format!("Load failed: {e}"),
-                    },
+                            Err(e) => format!("Load failed: {e}"),
+                        };
+                        self.last_filename = prompt.input;
+                        result
+                    }
+                    PathPromptMode::LoadSample { voice } => {
+                        let path = self.sample_dir.join(&prompt.input);
+                        let result = match crate::audio::sample::load_wav(&path) {
+                            Ok(sample) => {
+                                let name = prompt.input.clone();
+                                let _ = self.config_tx.try_send(ConfigCommand::LoadSample {
+                                    voice,
+                                    sample: Arc::new(sample),
+                                    name: name.clone(),
+                                    root_note: 60,
+                                });
+                                format!("Loaded sample {} into voice {:X}", name, voice)
+                            }
+                            Err(e) => format!("Sample load failed: {e}"),
+                        };
+                        self.last_sample_filename = prompt.input;
+                        result
+                    }
                 };
-                self.last_filename = prompt.input;
                 self.status_msg = Some((msg, Instant::now()));
             }
             _ => {}
@@ -291,9 +340,11 @@ impl App {
         let popup = centered_rect(50, 40, area);
         frame.render_widget(Clear, popup);
         let title = match prompt.mode {
-            PathPromptMode::Save => "Save preset as  (Enter:confirm  Esc:cancel)",
-            PathPromptMode::Load => "Load preset  (Enter:confirm  Esc:cancel)",
+            PathPromptMode::Save => "Save preset as  (↑↓:pick  Enter:confirm  Esc:cancel)",
+            PathPromptMode::Load => "Load preset  (↑↓:pick  Enter:confirm  Esc:cancel)",
+            PathPromptMode::LoadSample { .. } => "Load sample (.wav)  (↑↓:pick  Enter:confirm  Esc:cancel)",
         };
+        let dir = self.prompt_dir();
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -305,21 +356,29 @@ impl App {
             .block(Block::default().title(title).borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)));
         frame.render_widget(input, chunks[0]);
 
-        let files = self.preset_files();
-        let list_text = if files.is_empty() {
-            format!("(no presets in {})", self.preset_dir.display())
+        let files = list_files(dir);
+        let list_block = Block::default()
+            .title(format!("Files in {}", dir.display()))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+        if files.is_empty() {
+            let empty = Paragraph::new(format!("(no files in {})", dir.display()))
+                .style(Style::default().fg(Color::Gray))
+                .block(list_block);
+            frame.render_widget(empty, chunks[1]);
         } else {
-            files.join("\n")
-        };
-        let list = Paragraph::new(list_text)
-            .style(Style::default().fg(Color::Gray))
-            .block(
-                Block::default()
-                    .title(format!("Files in {}", self.preset_dir.display()))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan)),
-            );
-        frame.render_widget(list, chunks[1]);
+            let items: Vec<ListItem> = files.iter().enumerate().map(|(i, name)| {
+                let is_sel = prompt.selected == Some(i);
+                let style = if is_sel {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+                let indicator = if is_sel { "► " } else { "  " };
+                ListItem::new(Line::styled(format!("{}{}", indicator, name), style))
+            }).collect();
+            frame.render_widget(List::new(items).block(list_block), chunks[1]);
+        }
     }
 
     fn handle_picker_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) {
@@ -359,10 +418,28 @@ impl App {
                 midi_note: v.default_midi_note,
                 velocity: v.default_velocity,
                 length_samples: 24000, // ~0.5s at 48kHz
+                length_units: 35, // full sample length if the voice is playing a sample
                 detune_cents: 0.0,
             });
             return;
         }
+
+        if key.code == KeyCode::Char('L') {
+            let voice = self.voice_panel.selected_voice;
+            self.path_prompt = Some(PathPrompt {
+                mode: PathPromptMode::LoadSample { voice },
+                input: self.last_sample_filename.clone(),
+                selected: None,
+            });
+            return;
+        }
+
+        if key.code == KeyCode::Char('X') {
+            let voice = self.voice_panel.selected_voice;
+            let _ = self.config_tx.try_send(ConfigCommand::ClearSample { voice });
+            return;
+        }
+
         for cmd in self.voice_panel.handle_key(key, state) {
             let _ = self.config_tx.try_send(cmd);
         }
@@ -373,9 +450,7 @@ impl App {
 
         if panel.editing {
             match key.code {
-                KeyCode::Up => {
-                    if panel.selected_param > 0 { panel.selected_param -= 1; }
-                }
+                KeyCode::Up if panel.selected_param > 0 => { panel.selected_param -= 1; }
                 KeyCode::Down => {
                     let param_count = group_ref(state, panel.selected_group)
                         .effects.get(panel.selected_effect)
@@ -430,15 +505,13 @@ impl App {
                 panel.show_picker = true;
                 panel.picker_selection = 0;
             }
-            KeyCode::Char('d') => {
-                if !group_ref(state, panel.selected_group).effects.is_empty() {
-                    let _ = self.config_tx.try_send(ConfigCommand::RemoveEffect {
-                        group: panel.selected_group,
-                        position: panel.selected_effect,
-                    });
-                    panel.selected_effect = panel.selected_effect.saturating_sub(1);
-                    panel.selected_param = 0;
-                }
+            KeyCode::Char('d') if !group_ref(state, panel.selected_group).effects.is_empty() => {
+                let _ = self.config_tx.try_send(ConfigCommand::RemoveEffect {
+                    group: panel.selected_group,
+                    position: panel.selected_effect,
+                });
+                panel.selected_effect = panel.selected_effect.saturating_sub(1);
+                panel.selected_param = 0;
             }
             KeyCode::Char('<') => {
                 let effect_count = group_ref(state, panel.selected_group).effects.len();
@@ -469,30 +542,30 @@ impl App {
     fn adjust_fx_param(&self, state: &SynthState, dir: i32, fine: bool) {
         let panel = &self.fx_panel;
         let group = group_ref(state, panel.selected_group);
-        if let Some(effect) = group.effects.get(panel.selected_effect) {
-            if let Some(param) = effect.params.get(panel.selected_param) {
-                let new_value = if param.labels.is_some() {
-                    // Enum param: always step by 1, wrap at boundaries.
-                    (param.value + dir as f32).clamp(param.min, param.max)
-                } else if param.logarithmic {
-                    // Logarithmic param (frequency): multiply by a semitone-based factor.
-                    // Coarse = 2 semitones, fine = 1 semitone per press.
-                    let semitones: f32 = if fine { 1.0 } else { 2.0 };
-                    let factor = (2.0_f32).powf(semitones / 12.0);
-                    let factor = if dir > 0 { factor } else { 1.0 / factor };
-                    (param.value * factor).clamp(param.min, param.max)
-                } else {
-                    let range = param.max - param.min;
-                    let step = if fine { 0.01 } else { 0.05 };
-                    (param.value + dir as f32 * step * range).clamp(param.min, param.max)
-                };
-                let _ = self.config_tx.try_send(ConfigCommand::SetEffectParam {
-                    group: panel.selected_group,
-                    effect_idx: panel.selected_effect,
-                    param: param.name.clone(),
-                    value: new_value,
-                });
-            }
+        if let Some(effect) = group.effects.get(panel.selected_effect)
+            && let Some(param) = effect.params.get(panel.selected_param)
+        {
+            let new_value = if param.labels.is_some() {
+                // Enum param: always step by 1, wrap at boundaries.
+                (param.value + dir as f32).clamp(param.min, param.max)
+            } else if param.logarithmic {
+                // Logarithmic param (frequency): multiply by a semitone-based factor.
+                // Coarse = 2 semitones, fine = 1 semitone per press.
+                let semitones: f32 = if fine { 1.0 } else { 2.0 };
+                let factor = (2.0_f32).powf(semitones / 12.0);
+                let factor = if dir > 0 { factor } else { 1.0 / factor };
+                (param.value * factor).clamp(param.min, param.max)
+            } else {
+                let range = param.max - param.min;
+                let step = if fine { 0.01 } else { 0.05 };
+                (param.value + dir as f32 * step * range).clamp(param.min, param.max)
+            };
+            let _ = self.config_tx.try_send(ConfigCommand::SetEffectParam {
+                group: panel.selected_group,
+                effect_idx: panel.selected_effect,
+                param: param.name.clone(),
+                value: new_value,
+            });
         }
     }
 
@@ -505,6 +578,7 @@ impl App {
                 midi_note: *midi_note,
                 velocity: *velocity,
                 length_samples: 12000, // ~0.25s at 48kHz
+                length_units: 35, // full sample length if the voice is playing a sample
                 detune_cents: 0.0,
             });
         }
@@ -512,6 +586,20 @@ impl App {
             let _ = self.config_tx.try_send(cmd);
         }
     }
+}
+
+fn list_files(dir: &std::path::Path) -> Vec<String> {
+    let mut files: Vec<String> = std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
 }
 
 /// Groups 0-3 are the send groups A-D; group 4 is the global bus.

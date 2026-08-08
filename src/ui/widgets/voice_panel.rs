@@ -14,8 +14,9 @@ use crate::state::synth_state::{EnvelopeParams, SynthState};
 /// 0-2: OSC (wave, note, velocity)
 /// 3-5: SUB (on, octave, level)
 /// 6-9: ENV (attack, decay, sustain, release)
-/// 10-13: SENDS (A, B, C, D)
-const PARAM_COUNT: usize = 14;
+/// 10-12: SAMPLE (use sample, root note, level)
+/// 13-16: SENDS (A, B, C, D)
+const PARAM_COUNT: usize = 17;
 
 /// Snapshot of a voice's configuration, used for copy/paste
 #[derive(Debug, Clone)]
@@ -49,15 +50,23 @@ impl VoicePanel {
 
     /// Convert voice index to visual (row, col) in the 2×8 grid
     fn voice_to_grid(v: usize) -> (usize, usize) {
-        if v < 4       { (0, v) }
-        else if v < 8  { (1, v - 4) }
-        else if v < 12 { (0, v - 4) }
-        else           { (1, v - 8) }
+        if v < 4 {
+            (0, v)
+        } else if v < 8 {
+            (1, v - 4)
+        } else if v < 12 {
+            (0, v - 4)
+        } else {
+            (1, v - 8)
+        }
     }
 
     fn grid_to_voice(row: usize, col: usize) -> usize {
-        if col < 4 { row * 4 + col }
-        else       { 8 + row * 4 + (col - 4) }
+        if col < 4 {
+            row * 4 + col
+        } else {
+            8 + row * 4 + (col - 4)
+        }
     }
 
     fn move_grid(&mut self, drow: i32, dcol: i32) {
@@ -81,12 +90,25 @@ impl VoicePanel {
     }
 
     fn render_voice_grid(&self, frame: &mut Frame, area: Rect, state: &SynthState) {
-        let clip_hint = if self.clipboard.is_some() { "  [clipboard ready — p:paste]" } else { "" };
-        let mode_hint = if self.editing { "  [EDITING — ↑↓:param  ←→:adjust  Shift:fine  Enter/Esc:done]" } else { "  [↑↓←→:navigate  Enter:edit  c:copy  p:paste]" };
+        let clip_hint = if self.clipboard.is_some() {
+            "  [clipboard ready — p:paste]"
+        } else {
+            ""
+        };
+        let mode_hint = if self.editing {
+            "  [EDITING — ↑↓:param  ←→:adjust  Shift:fine  Enter/Esc:done]"
+        } else {
+            "  [↑↓←→:navigate  Enter:edit  c:copy  p:paste  L:load sample  X:clear sample]"
+        };
         let title = format!("Voices{}{}", mode_hint, clip_hint);
-        let block = Block::default().title(title).borders(Borders::ALL).border_style(
-            if self.editing { Style::default().fg(Color::Yellow) } else { Style::default() }
-        );
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(if self.editing {
+                Style::default().fg(Color::Yellow)
+            } else {
+                Style::default()
+            });
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
@@ -129,7 +151,9 @@ impl VoicePanel {
                     };
 
                     let label_style = if is_selected {
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD)
                     } else if voice.active {
                         Style::default().fg(Color::Green)
                     } else {
@@ -137,28 +161,52 @@ impl VoicePanel {
                     };
 
                     let badge = if voice.soloed {
-                        Span::styled("S", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+                        Span::styled(
+                            "S",
+                            Style::default()
+                                .fg(Color::Yellow)
+                                .add_modifier(Modifier::BOLD),
+                        )
                     } else if voice.muted {
-                        Span::styled("M", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+                        Span::styled(
+                            "M",
+                            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                        )
                     } else {
                         Span::raw(" ")
                     };
                     let content = vec![
                         Line::from(vec![
-                            Span::styled(format!(" {:X}", voice_idx), label_style.add_modifier(Modifier::BOLD)),
+                            Span::styled(
+                                format!(" {:X}", voice_idx),
+                                label_style.add_modifier(Modifier::BOLD),
+                            ),
                             Span::raw(" "),
                             badge,
                         ]),
                         Line::from(Span::styled(
-                            format!(" {}", if voice.active { note_name } else { "--".to_string() }),
+                            format!(
+                                " {}",
+                                if voice.active {
+                                    note_name
+                                } else {
+                                    "--".to_string()
+                                }
+                            ),
                             label_style,
                         )),
-                        Line::from(Span::styled(format!(" {}", voice.osc_type.name()), Style::default().fg(Color::Cyan))),
+                        Line::from(Span::styled(
+                            format!(" {}", voice.osc_type.name()),
+                            Style::default().fg(Color::Cyan),
+                        )),
                         Line::from(Span::styled(amp_bar, Style::default().fg(Color::Green))),
                     ];
 
-                    let p = Paragraph::new(content)
-                        .block(Block::default().borders(Borders::ALL).border_style(border_style));
+                    let p = Paragraph::new(content).block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .border_style(border_style),
+                    );
                     frame.render_widget(p, cells[col]);
                 }
             }
@@ -171,16 +219,20 @@ impl VoicePanel {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(20),  // osc + env params (stacked)
-                Constraint::Percentage(57),  // adsr shape
-                Constraint::Percentage(23),  // sends
+                Constraint::Percentage(20), // osc + env params (stacked)
+                Constraint::Percentage(57), // adsr shape
+                Constraint::Percentage(23), // sends
             ])
             .split(area);
 
         // --- Left: stacked Osc + Sub + Env params ---
         render_params_panel(
-            frame, chunks[0], state, self.selected_voice,
-            self.editing, self.selected_param,
+            frame,
+            chunks[0],
+            state,
+            self.selected_voice,
+            self.editing,
+            self.selected_param,
         );
 
         // --- Middle: ADSR shape ---
@@ -188,31 +240,51 @@ impl VoicePanel {
 
         // --- Right: Sends ---
         let send_labels = ["A", "B", "C", "D"];
-        let sends_focused = self.editing && self.selected_param >= 10;
+        let sends_focused = self.editing && self.selected_param >= 13;
 
-        let sends: Vec<ListItem> = (0..4).map(|g| {
-            let level = state.routing[self.selected_voice][g];
-            let bar = send_bar(level, 10);
-            let is_selected = sends_focused && g == self.selected_param - 10;
-            let style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else if sends_focused {
-                Style::default().fg(Color::Gray)
-            } else {
-                Style::default()
-            };
-            let indicator = if is_selected { "►" } else { " " };
-            ListItem::new(Line::styled(
-                format!("{} {}: {} {:.0}%", indicator, send_labels[g], bar, level * 100.0),
-                style,
-            ))
-        }).collect();
+        let sends: Vec<ListItem> = (0..4)
+            .map(|g| {
+                let level = state.routing[self.selected_voice][g];
+                let bar = send_bar(level, 10);
+                let is_selected = sends_focused && g == self.selected_param - 13;
+                let style = if is_selected {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else if sends_focused {
+                    Style::default().fg(Color::Gray)
+                } else {
+                    Style::default()
+                };
+                let indicator = if is_selected { "►" } else { " " };
+                ListItem::new(Line::styled(
+                    format!(
+                        "{} {}: {} {:.0}%",
+                        indicator,
+                        send_labels[g],
+                        bar,
+                        level * 100.0
+                    ),
+                    style,
+                ))
+            })
+            .collect();
 
-        let send_title = if sends_focused { "Sends [↑↓  ←→]" } else { "Sends" };
-        let sends_list = List::new(sends)
-            .block(Block::default().title(send_title).borders(Borders::ALL).border_style(
-                if sends_focused { Style::default().fg(Color::Yellow) } else { Style::default() }
-            ));
+        let send_title = if sends_focused {
+            "Sends [↑↓  ←→]"
+        } else {
+            "Sends"
+        };
+        let sends_list = List::new(sends).block(
+            Block::default()
+                .title(send_title)
+                .borders(Borders::ALL)
+                .border_style(if sends_focused {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default()
+                }),
+        );
         frame.render_widget(sends_list, chunks[2]);
     }
 
@@ -220,35 +292,72 @@ impl VoicePanel {
         if self.editing {
             "↑↓:Select param  ←→:Adjust  Shift:Fine  Space:Trigger  Enter/Esc:Done editing  q:Quit"
         } else {
-            "↑↓←→:Navigate voice  Tab:Next  Space:Trigger  Enter:Edit  o:Cycle osc  m:Mute  s:Solo  c:Copy  p:Paste  q:Quit"
+            "↑↓←→:Navigate voice  Tab:Next  Space:Trigger  Enter:Edit  o:Cycle osc  m:Mute  s:Solo  c:Copy  p:Paste  L:Load sample  X:Clear sample  q:Quit"
         }
     }
 
     /// Handle a key event; returns commands to send to the audio engine.
-    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent, state: &SynthState) -> Vec<ConfigCommand> {
+    pub fn handle_key(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+        state: &SynthState,
+    ) -> Vec<ConfigCommand> {
         use crossterm::event::{KeyCode, KeyModifiers};
         let fine = key.modifiers.contains(KeyModifiers::SHIFT);
 
         if self.editing {
             match key.code {
-                KeyCode::Up    => { self.selected_param = self.selected_param.saturating_sub(1); vec![] }
-                KeyCode::Down  => { self.selected_param = (self.selected_param + 1).min(PARAM_COUNT - 1); vec![] }
-                KeyCode::Left  => self.adjust_param(state, -1, fine),
-                KeyCode::Right => self.adjust_param(state,  1, fine),
-                KeyCode::Enter | KeyCode::Esc => { self.editing = false; vec![] }
+                KeyCode::Up => {
+                    self.selected_param = self.selected_param.saturating_sub(1);
+                    vec![]
+                }
+                KeyCode::Down => {
+                    self.selected_param = (self.selected_param + 1).min(PARAM_COUNT - 1);
+                    vec![]
+                }
+                KeyCode::Left => self.adjust_param(state, -1, fine),
+                KeyCode::Right => self.adjust_param(state, 1, fine),
+                KeyCode::Enter | KeyCode::Esc => {
+                    self.editing = false;
+                    vec![]
+                }
                 _ => vec![],
             }
         } else {
             match key.code {
-                KeyCode::Up    => { self.move_grid(-1,  0); vec![] }
-                KeyCode::Down  => { self.move_grid( 1,  0); vec![] }
-                KeyCode::Left  => { self.move_grid( 0, -1); vec![] }
-                KeyCode::Right => { self.move_grid( 0,  1); vec![] }
-                KeyCode::Tab      => { self.selected_voice = (self.selected_voice + 1) % 16; vec![] }
-                KeyCode::BackTab  => { self.selected_voice = self.selected_voice.checked_sub(1).unwrap_or(15); vec![] }
-                KeyCode::Enter    => { self.editing = true; vec![] }
+                KeyCode::Up => {
+                    self.move_grid(-1, 0);
+                    vec![]
+                }
+                KeyCode::Down => {
+                    self.move_grid(1, 0);
+                    vec![]
+                }
+                KeyCode::Left => {
+                    self.move_grid(0, -1);
+                    vec![]
+                }
+                KeyCode::Right => {
+                    self.move_grid(0, 1);
+                    vec![]
+                }
+                KeyCode::Tab => {
+                    self.selected_voice = (self.selected_voice + 1) % 16;
+                    vec![]
+                }
+                KeyCode::BackTab => {
+                    self.selected_voice = self.selected_voice.checked_sub(1).unwrap_or(15);
+                    vec![]
+                }
+                KeyCode::Enter => {
+                    self.editing = true;
+                    vec![]
+                }
                 KeyCode::Char('o') => self.cycle_osc(state, 1).into_iter().collect(),
-                KeyCode::Char('c') => { self.copy_voice(state); vec![] }
+                KeyCode::Char('c') => {
+                    self.copy_voice(state);
+                    vec![]
+                }
                 KeyCode::Char('p') => self.paste_voice(state),
                 KeyCode::Char('m') => {
                     let v = self.selected_voice;
@@ -278,15 +387,20 @@ impl VoicePanel {
     }
 
     fn paste_voice(&self, state: &SynthState) -> Vec<ConfigCommand> {
-        let Some(ref clip) = self.clipboard else { return vec![]; };
+        let Some(ref clip) = self.clipboard else {
+            return vec![];
+        };
         let dst = self.selected_voice;
         let _ = state;
         let mut cmds = vec![
-            ConfigCommand::SetOscillator { voice: dst, osc_type: clip.osc_type },
+            ConfigCommand::SetOscillator {
+                voice: dst,
+                osc_type: clip.osc_type,
+            },
             ConfigCommand::SetEnvelope {
                 voice: dst,
-                attack:  clip.envelope.attack,
-                decay:   clip.envelope.decay,
+                attack: clip.envelope.attack,
+                decay: clip.envelope.decay,
                 sustain: clip.envelope.sustain,
                 release: clip.envelope.release,
             },
@@ -298,7 +412,11 @@ impl VoicePanel {
             },
         ];
         for g in 0..4 {
-            cmds.push(ConfigCommand::SetSendLevel { voice: dst, group: g, level: clip.sends[g] });
+            cmds.push(ConfigCommand::SetSendLevel {
+                voice: dst,
+                group: g,
+                level: clip.sends[g],
+            });
         }
         cmds
     }
@@ -308,7 +426,10 @@ impl VoicePanel {
         let current = state.voices[self.selected_voice].osc_type;
         let idx = types.iter().position(|&t| t == current).unwrap_or(0) as i32;
         let new_idx = (idx + dir).rem_euclid(types.len() as i32) as usize;
-        Some(ConfigCommand::SetOscillator { voice: self.selected_voice, osc_type: types[new_idx] })
+        Some(ConfigCommand::SetOscillator {
+            voice: self.selected_voice,
+            osc_type: types[new_idx],
+        })
     }
 
     /// Adjust the currently selected param by `dir` (+1 or -1).
@@ -321,12 +442,18 @@ impl VoicePanel {
             1 => {
                 let step: i32 = if fine { 1 } else { 12 };
                 let new_note = (v.default_midi_note as i32 + dir * step).clamp(0, 127) as u8;
-                vec![ConfigCommand::SetDefaultNote { voice, midi_note: new_note }]
+                vec![ConfigCommand::SetDefaultNote {
+                    voice,
+                    midi_note: new_note,
+                }]
             }
             2 => {
                 let step = if fine { 0.01 } else { 0.05 };
                 let new_vel = (v.default_velocity + dir as f32 * step).clamp(0.0, 1.0);
-                vec![ConfigCommand::SetDefaultVelocity { voice, velocity: new_vel }]
+                vec![ConfigCommand::SetDefaultVelocity {
+                    voice,
+                    velocity: new_vel,
+                }]
             }
             // --- SUB ---
             3 => vec![ConfigCommand::SetSubOsc {
@@ -337,12 +464,22 @@ impl VoicePanel {
             }],
             4 => {
                 let new_oct = (v.sub_osc_octave + dir).clamp(-2, 2);
-                vec![ConfigCommand::SetSubOsc { voice, enabled: v.sub_osc_enabled, octave: new_oct, level: v.sub_osc_level }]
+                vec![ConfigCommand::SetSubOsc {
+                    voice,
+                    enabled: v.sub_osc_enabled,
+                    octave: new_oct,
+                    level: v.sub_osc_level,
+                }]
             }
             5 => {
                 let step = if fine { 0.01 } else { 0.05 };
                 let new_level = (v.sub_osc_level + dir as f32 * step).clamp(0.0, 1.0);
-                vec![ConfigCommand::SetSubOsc { voice, enabled: v.sub_osc_enabled, octave: v.sub_osc_octave, level: new_level }]
+                vec![ConfigCommand::SetSubOsc {
+                    voice,
+                    enabled: v.sub_osc_enabled,
+                    octave: v.sub_osc_octave,
+                    level: new_level,
+                }]
             }
             // --- ENV ---
             6..=9 => {
@@ -350,20 +487,63 @@ impl VoicePanel {
                 let (a, d, s, r) = (env.attack, env.decay, env.sustain, env.release);
                 let sign = dir as f32;
                 let (na, nd, ns, nr) = match self.selected_param {
-                    6 => { let st = if fine { 0.01 } else { 0.1 }; ((a + sign * st).clamp(0.001, 10.0), d, s, r) }
-                    7 => { let st = if fine { 0.01 } else { 0.1 }; (a, (d + sign * st).clamp(0.001, 10.0), s, r) }
-                    8 => { let st = if fine { 0.01 } else { 0.05 }; (a, d, (s + sign * st).clamp(0.0, 1.0), r) }
-                    9 => { let st = if fine { 0.01 } else { 0.1 }; (a, d, s, (r + sign * st).clamp(0.001, 10.0)) }
+                    6 => {
+                        let st = if fine { 0.01 } else { 0.1 };
+                        ((a + sign * st).clamp(0.001, 10.0), d, s, r)
+                    }
+                    7 => {
+                        let st = if fine { 0.01 } else { 0.1 };
+                        (a, (d + sign * st).clamp(0.001, 10.0), s, r)
+                    }
+                    8 => {
+                        let st = if fine { 0.01 } else { 0.05 };
+                        (a, d, (s + sign * st).clamp(0.0, 1.0), r)
+                    }
+                    9 => {
+                        let st = if fine { 0.01 } else { 0.1 };
+                        (a, d, s, (r + sign * st).clamp(0.001, 10.0))
+                    }
                     _ => unreachable!(),
                 };
-                vec![ConfigCommand::SetEnvelope { voice, attack: na, decay: nd, sustain: ns, release: nr }]
+                vec![ConfigCommand::SetEnvelope {
+                    voice,
+                    attack: na,
+                    decay: nd,
+                    sustain: ns,
+                    release: nr,
+                }]
+            }
+            // --- SAMPLE ---
+            10 => vec![ConfigCommand::SetSampleMode {
+                voice,
+                use_sample: !v.use_sample,
+            }],
+            11 => {
+                let step: i32 = if fine { 1 } else { 12 };
+                let new_note = (v.sample_root_note as i32 + dir * step).clamp(0, 127) as u8;
+                vec![ConfigCommand::SetSampleRootNote {
+                    voice,
+                    root_note: new_note,
+                }]
+            }
+            12 => {
+                let step = if fine { 0.01 } else { 0.05 };
+                let new_level = (v.sample_level + dir as f32 * step).clamp(0.0, 10.0);
+                vec![ConfigCommand::SetSampleLevel {
+                    voice,
+                    level: new_level,
+                }]
             }
             // --- SENDS ---
-            10..=13 => {
-                let g = self.selected_param - 10;
+            13..=16 => {
+                let g = self.selected_param - 13;
                 let step = if fine { 0.01 } else { 0.1 };
                 let current = state.routing[voice][g];
-                vec![ConfigCommand::SetSendLevel { voice, group: g, level: (current + dir as f32 * step).clamp(0.0, 1.0) }]
+                vec![ConfigCommand::SetSendLevel {
+                    voice,
+                    group: g,
+                    level: (current + dir as f32 * step).clamp(0.0, 1.0),
+                }]
             }
             _ => vec![],
         }
@@ -391,14 +571,15 @@ pub fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
 
     let display_len = if let Some(next) = next_crossing {
         let period = next - sync_pos;
-        ((period as f32 * 2.5) as usize)
-            .clamp(32, scope.len().saturating_sub(sync_pos))
+        ((period as f32 * 2.5) as usize).clamp(32, scope.len().saturating_sub(sync_pos))
     } else {
         (dot_w * 3).min(scope.len().saturating_sub(sync_pos))
     };
 
     let samples = &scope[sync_pos..(sync_pos + display_len).min(scope.len())];
-    if samples.len() < 2 { return; }
+    if samples.len() < 2 {
+        return;
+    }
 
     let mut dots = vec![false; dot_w * dot_h];
 
@@ -419,48 +600,76 @@ pub fn render_oscilloscope(frame: &mut Frame, area: Rect, scope: &[f32]) {
 
     for dx in 0..dot_w {
         let row = to_dot_row(interp(dx));
-        let prev_row = if dx > 0 { to_dot_row(interp(dx - 1)) } else { row };
-        let (r_min, r_max) = if row <= prev_row { (row, prev_row) } else { (prev_row, row) };
+        let prev_row = if dx > 0 {
+            to_dot_row(interp(dx - 1))
+        } else {
+            row
+        };
+        let (r_min, r_max) = if row <= prev_row {
+            (row, prev_row)
+        } else {
+            (prev_row, row)
+        };
         for r in r_min..=r_max {
-            if r < dot_h { dots[r * dot_w + dx] = true; }
+            if r < dot_h {
+                dots[r * dot_w + dx] = true;
+            }
         }
     }
 
     const DOT_MAP: [(usize, usize, u32); 8] = [
-        (0, 0, 0x01), (1, 0, 0x02), (2, 0, 0x04), (3, 0, 0x40),
-        (0, 1, 0x08), (1, 1, 0x10), (2, 1, 0x20), (3, 1, 0x80),
+        (0, 0, 0x01),
+        (1, 0, 0x02),
+        (2, 0, 0x04),
+        (3, 0, 0x40),
+        (0, 1, 0x08),
+        (1, 1, 0x10),
+        (2, 1, 0x20),
+        (3, 1, 0x80),
     ];
 
     let center_char_row = dot_h / 2 / 4;
 
-    let lines: Vec<Line> = (0..inner.height as usize).map(|cy| {
-        Line::from((0..inner.width as usize).map(|cx| {
-            let mut bits: u32 = 0;
-            for (dr, dc, bit) in &DOT_MAP {
-                let r = cy * 4 + dr;
-                let c = cx * 2 + dc;
-                if r < dot_h && c < dot_w && dots[r * dot_w + c] { bits |= bit; }
-            }
+    let lines: Vec<Line> = (0..inner.height as usize)
+        .map(|cy| {
+            Line::from(
+                (0..inner.width as usize)
+                    .map(|cx| {
+                        let mut bits: u32 = 0;
+                        for (dr, dc, bit) in &DOT_MAP {
+                            let r = cy * 4 + dr;
+                            let c = cx * 2 + dc;
+                            if r < dot_h && c < dot_w && dots[r * dot_w + c] {
+                                bits |= bit;
+                            }
+                        }
 
-            let (ch, color) = if bits != 0 {
-                let ch = char::from_u32(0x2800 + bits).unwrap_or('?');
-                let cx_dot = cx * 2 + 1;
-                let t = cx_dot as f32 / (dot_w - 1).max(1) as f32;
-                let si = (t * (samples.len() - 1) as f32) as usize;
-                let amp = samples[si.min(samples.len() - 1)].abs();
-                let color = if amp > 0.8 { Color::Red }
-                            else if amp > 0.4 { Color::Yellow }
-                            else { Color::Green };
-                (ch, color)
-            } else if cy == center_char_row {
-                ('·', Color::DarkGray)
-            } else {
-                (' ', Color::Reset)
-            };
+                        let (ch, color) = if bits != 0 {
+                            let ch = char::from_u32(0x2800 + bits).unwrap_or('?');
+                            let cx_dot = cx * 2 + 1;
+                            let t = cx_dot as f32 / (dot_w - 1).max(1) as f32;
+                            let si = (t * (samples.len() - 1) as f32) as usize;
+                            let amp = samples[si.min(samples.len() - 1)].abs();
+                            let color = if amp > 0.8 {
+                                Color::Red
+                            } else if amp > 0.4 {
+                                Color::Yellow
+                            } else {
+                                Color::Green
+                            };
+                            (ch, color)
+                        } else if cy == center_char_row {
+                            ('·', Color::DarkGray)
+                        } else {
+                            (' ', Color::Reset)
+                        };
 
-            Span::styled(ch.to_string(), Style::default().fg(color))
-        }).collect::<Vec<_>>())
-    }).collect();
+                        Span::styled(ch.to_string(), Style::default().fg(color))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -476,29 +685,50 @@ fn render_params_panel(
 ) {
     let v = &state.voices[voice_idx];
 
-    let title = if editing { "Params [↑↓  ←→]" } else { "Params" };
-    let border_style = if editing { Style::default().fg(Color::Yellow) } else { Style::default() };
-    let block = Block::default().title(title).borders(Borders::ALL).border_style(border_style);
+    let title = if editing {
+        "Params [↑↓  ←→]"
+    } else {
+        "Params"
+    };
+    let border_style = if editing {
+        Style::default().fg(Color::Yellow)
+    } else {
+        Style::default()
+    };
+    let block = Block::default()
+        .title(title)
+        .borders(Borders::ALL)
+        .border_style(border_style);
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 2 { return; }
+    if inner.height < 2 {
+        return;
+    }
 
     let osc_types = OscillatorType::all();
     let osc_idx = osc_types.iter().position(|&t| t == v.osc_type).unwrap_or(0);
 
     let osc_fields: [(&str, String); 3] = [
-        ("Wave", format!("◄{}►  {}/{}", v.osc_type.name(), osc_idx + 1, osc_types.len())),
+        (
+            "Wave",
+            format!(
+                "◄{}►  {}/{}",
+                v.osc_type.name(),
+                osc_idx + 1,
+                osc_types.len()
+            ),
+        ),
         ("Note", midi_note_name(v.default_midi_note)),
-        ("Vel",  format!("{:.0}%", v.default_velocity * 100.0)),
+        ("Vel", format!("{:.0}%", v.default_velocity * 100.0)),
     ];
 
     const PHASE_COLORS: [Color; 4] = [Color::Green, Color::Yellow, Color::Cyan, Color::Magenta];
     let env = &v.envelope;
     let env_fields: [(&str, f32, &str, f32, f32); 4] = [
-        ("A", env.attack,  "s", 0.001, 10.0),
-        ("D", env.decay,   "s", 0.001, 10.0),
-        ("S", env.sustain, "",  0.0,   1.0),
+        ("A", env.attack, "s", 0.001, 10.0),
+        ("D", env.decay, "s", 0.001, 10.0),
+        ("S", env.sustain, "", 0.0, 1.0),
         ("R", env.release, "s", 0.001, 10.0),
     ];
 
@@ -507,20 +737,42 @@ fn render_params_panel(
     // OSC section
     lines.push(Line::styled(
         " OSC",
-        Style::default().fg(if editing && selected_param <= 2 { Color::Yellow } else { Color::DarkGray })
-            .add_modifier(if editing && selected_param <= 2 { Modifier::BOLD } else { Modifier::empty() }),
+        Style::default()
+            .fg(if editing && selected_param <= 2 {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            })
+            .add_modifier(if editing && selected_param <= 2 {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
     ));
     for (i, (label, value)) in osc_fields.iter().enumerate() {
         let is_sel = editing && i == selected_param;
         let ind = if is_sel { "►" } else { " " };
         if is_sel {
             lines.push(Line::from(vec![
-                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled(value.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{}{}: ", ind, label),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    value.clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}{}: ", ind, label),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::raw(value.clone()),
             ]));
         }
@@ -530,11 +782,27 @@ fn render_params_panel(
     lines.push(Line::raw(""));
     lines.push(Line::styled(
         " SUB",
-        Style::default().fg(if editing && selected_param >= 3 && selected_param <= 5 { Color::Yellow } else { Color::DarkGray })
-            .add_modifier(if editing && selected_param >= 3 && selected_param <= 5 { Modifier::BOLD } else { Modifier::empty() }),
+        Style::default()
+            .fg(if editing && (3..=5).contains(&selected_param) {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            })
+            .add_modifier(if editing && (3..=5).contains(&selected_param) {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
     ));
     let sub_fields: [(&str, String); 3] = [
-        ("On",  if v.sub_osc_enabled { "On".to_string() } else { "Off".to_string() }),
+        (
+            "On",
+            if v.sub_osc_enabled {
+                "On".to_string()
+            } else {
+                "Off".to_string()
+            },
+        ),
         ("Oct", format!("{:+}", v.sub_osc_octave)),
         ("Lvl", format!("{:.0}%", v.sub_osc_level * 100.0)),
     ];
@@ -546,12 +814,25 @@ fn render_params_panel(
         let val_color = if dim { Color::DarkGray } else { Color::Cyan };
         if is_sel {
             lines.push(Line::from(vec![
-                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-                Span::styled(value.clone(), Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{}{}: ", ind, label),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    value.clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::styled(format!("{}{}: ", ind, label), Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}{}: ", ind, label),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::styled(value.clone(), Style::default().fg(val_color)),
             ]));
         }
@@ -561,8 +842,17 @@ fn render_params_panel(
     lines.push(Line::raw(""));
     lines.push(Line::styled(
         " ENV",
-        Style::default().fg(if editing && selected_param >= 6 && selected_param <= 9 { Color::Yellow } else { Color::DarkGray })
-            .add_modifier(if editing && selected_param >= 6 && selected_param <= 9 { Modifier::BOLD } else { Modifier::empty() }),
+        Style::default()
+            .fg(if editing && (6..=9).contains(&selected_param) {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            })
+            .add_modifier(if editing && (6..=9).contains(&selected_param) {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
     ));
     for (i, (name, val, unit, min, max)) in env_fields.iter().enumerate() {
         let param_idx = 6 + i;
@@ -572,11 +862,75 @@ fn render_params_panel(
         let ind = if is_sel { "►" } else { " " };
         let text = format!("{}{} {:.2}{} {}", ind, name, val, unit, bar);
         let style = if is_sel {
-            Style::default().fg(color).add_modifier(Modifier::BOLD).add_modifier(Modifier::REVERSED)
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::BOLD)
+                .add_modifier(Modifier::REVERSED)
         } else {
             Style::default().fg(color)
         };
         lines.push(Line::styled(text, style));
+    }
+
+    // SAMPLE section
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        " SAMPLE",
+        Style::default()
+            .fg(if editing && (10..=12).contains(&selected_param) {
+                Color::Yellow
+            } else {
+                Color::DarkGray
+            })
+            .add_modifier(if editing && (10..=12).contains(&selected_param) {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            }),
+    ));
+    let sample_label = v.sample_name.as_deref().unwrap_or("(none loaded, L:load)");
+    let sample_fields: [(&str, String); 3] = [
+        (
+            "Use",
+            if v.use_sample {
+                format!("On  {}", sample_label)
+            } else {
+                format!("Off {}", sample_label)
+            },
+        ),
+        ("Root", midi_note_name(v.sample_root_note)),
+        ("Lvl", format!("{:.0}%", v.sample_level * 100.0)),
+    ];
+    for (i, (label, value)) in sample_fields.iter().enumerate() {
+        let param_idx = 10 + i;
+        let is_sel = editing && param_idx == selected_param;
+        let ind = if is_sel { "►" } else { " " };
+        let dim = v.sample_name.is_none();
+        let val_color = if dim { Color::DarkGray } else { Color::Cyan };
+        if is_sel {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}{}: ", ind, label),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    value.clone(),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("{}{}: ", ind, label),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(value.clone(), Style::default().fg(val_color)),
+            ]));
+        }
     }
 
     frame.render_widget(Paragraph::new(lines), inner);
@@ -588,7 +942,9 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    if inner.height < 2 || inner.width < 4 { return; }
+    if inner.height < 2 || inner.width < 4 {
+        return;
+    }
 
     let dot_w = inner.width as usize * 2;
     let dot_h = inner.height as usize * 4;
@@ -597,21 +953,30 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
 
     let sustain_t = 0.3f32;
     let total_t = env.attack + env.decay + sustain_t + env.release;
-    let a_cols = ((env.attack  / total_t) * dot_w as f32).round() as usize;
-    let d_cols = ((env.decay   / total_t) * dot_w as f32).round() as usize;
+    let a_cols = ((env.attack / total_t) * dot_w as f32).round() as usize;
+    let d_cols = ((env.decay / total_t) * dot_w as f32).round() as usize;
     let r_cols = ((env.release / total_t) * dot_w as f32).round() as usize;
     let s_cols = dot_w.saturating_sub(a_cols + d_cols + r_cols);
 
     let phase_of = |x: usize| -> usize {
-        if x < a_cols { 0 }
-        else if x < a_cols + d_cols { 1 }
-        else if x < a_cols + d_cols + s_cols { 2 }
-        else { 3 }
+        if x < a_cols {
+            0
+        } else if x < a_cols + d_cols {
+            1
+        } else if x < a_cols + d_cols + s_cols {
+            2
+        } else {
+            3
+        }
     };
 
     let envelope_at = |x: usize| -> f32 {
         if x < a_cols {
-            if a_cols > 0 { x as f32 / a_cols as f32 } else { 1.0 }
+            if a_cols > 0 {
+                x as f32 / a_cols as f32
+            } else {
+                1.0
+            }
         } else if x < a_cols + d_cols {
             let t = (x - a_cols) as f32 / d_cols.max(1) as f32;
             1.0 - t * (1.0 - env.sustain)
@@ -623,9 +988,8 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
         }
     };
 
-    let to_dot_row = |v: f32| -> usize {
-        ((1.0 - v.clamp(0.0, 1.0)) * (dot_h - 1) as f32).round() as usize
-    };
+    let to_dot_row =
+        |v: f32| -> usize { ((1.0 - v.clamp(0.0, 1.0)) * (dot_h - 1) as f32).round() as usize };
 
     let mut dots: Vec<(bool, Color)> = vec![(false, Color::Reset); dot_w * dot_h];
 
@@ -655,40 +1019,52 @@ fn render_adsr_shape(frame: &mut Frame, area: Rect, env: &EnvelopeParams) {
     }
 
     const DOT_MAP: [(usize, usize, u32); 8] = [
-        (0, 0, 0x01), (1, 0, 0x02), (2, 0, 0x04), (3, 0, 0x40),
-        (0, 1, 0x08), (1, 1, 0x10), (2, 1, 0x20), (3, 1, 0x80),
+        (0, 0, 0x01),
+        (1, 0, 0x02),
+        (2, 0, 0x04),
+        (3, 0, 0x40),
+        (0, 1, 0x08),
+        (1, 1, 0x10),
+        (2, 1, 0x20),
+        (3, 1, 0x80),
     ];
 
     let h = inner.height as usize;
     let w = inner.width as usize;
 
-    let lines: Vec<Line> = (0..h).map(|cy| {
-        Line::from((0..w).map(|cx| {
-            let mut bits: u32 = 0;
-            let mut cell_color = Color::DarkGray;
-            let mut top_set_row = dot_h;
-            for (dr, dc, bit) in &DOT_MAP {
-                let r = cy * 4 + dr;
-                let c = cx * 2 + dc;
-                if r < dot_h && c < dot_w {
-                    let (set, col) = dots[r * dot_w + c];
-                    if set {
-                        bits |= bit;
-                        if r < top_set_row {
-                            top_set_row = r;
-                            cell_color = col;
+    let lines: Vec<Line> = (0..h)
+        .map(|cy| {
+            Line::from(
+                (0..w)
+                    .map(|cx| {
+                        let mut bits: u32 = 0;
+                        let mut cell_color = Color::DarkGray;
+                        let mut top_set_row = dot_h;
+                        for (dr, dc, bit) in &DOT_MAP {
+                            let r = cy * 4 + dr;
+                            let c = cx * 2 + dc;
+                            if r < dot_h && c < dot_w {
+                                let (set, col) = dots[r * dot_w + c];
+                                if set {
+                                    bits |= bit;
+                                    if r < top_set_row {
+                                        top_set_row = r;
+                                        cell_color = col;
+                                    }
+                                }
+                            }
                         }
-                    }
-                }
-            }
-            let ch = if bits != 0 {
-                char::from_u32(0x2800 + bits).unwrap_or('?')
-            } else {
-                ' '
-            };
-            Span::styled(ch.to_string(), Style::default().fg(cell_color))
-        }).collect::<Vec<_>>())
-    }).collect();
+                        let ch = if bits != 0 {
+                            char::from_u32(0x2800 + bits).unwrap_or('?')
+                        } else {
+                            ' '
+                        };
+                        Span::styled(ch.to_string(), Style::default().fg(cell_color))
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
 
     frame.render_widget(Paragraph::new(lines), inner);
 }
@@ -700,7 +1076,9 @@ fn mini_bar(value: f32, min: f32, max: f32, width: usize) -> String {
 }
 
 fn midi_note_name(midi: u8) -> String {
-    const NAMES: &[&str] = &["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+    const NAMES: &[&str] = &[
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B",
+    ];
     let octave = (midi / 12) as i32 - 1;
     format!("{}{}", NAMES[(midi % 12) as usize], octave)
 }
