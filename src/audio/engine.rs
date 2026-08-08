@@ -258,6 +258,7 @@ impl AudioEngine {
                 use_sample: self.voices[i].use_sample,
                 sample_root_note: self.voices[i].sample_root_note,
                 sample_level: self.voices[i].sample_level,
+                sample: self.voices[i].sample.clone(),
             }
         });
 

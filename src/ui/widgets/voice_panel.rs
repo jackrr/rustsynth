@@ -6,7 +6,9 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, Paragraph},
 };
 
-use crate::state::messages::{ConfigCommand, OscillatorType};
+use std::sync::Arc;
+
+use crate::state::messages::{ConfigCommand, OscillatorType, SampleData};
 use crate::state::synth_state::{EnvelopeParams, SynthState};
 
 /// Flat parameter indices used when editing a voice.
@@ -27,6 +29,11 @@ pub struct VoiceClipboard {
     pub sub_osc_enabled: bool,
     pub sub_osc_octave: i32,
     pub sub_osc_level: f32,
+    pub sample: Option<Arc<SampleData>>,
+    pub sample_name: Option<String>,
+    pub use_sample: bool,
+    pub sample_root_note: u8,
+    pub sample_level: f32,
 }
 
 pub struct VoicePanel {
@@ -383,6 +390,11 @@ impl VoicePanel {
             sub_osc_enabled: voice.sub_osc_enabled,
             sub_osc_octave: voice.sub_osc_octave,
             sub_osc_level: voice.sub_osc_level,
+            sample: voice.sample.clone(),
+            sample_name: voice.sample_name.clone(),
+            use_sample: voice.use_sample,
+            sample_root_note: voice.sample_root_note,
+            sample_level: voice.sample_level,
         });
     }
 
@@ -417,6 +429,19 @@ impl VoicePanel {
                 group: g,
                 level: clip.sends[g],
             });
+        }
+        match (&clip.sample, &clip.sample_name) {
+            (Some(sample), Some(name)) => {
+                cmds.push(ConfigCommand::LoadSample {
+                    voice: dst,
+                    sample: sample.clone(),
+                    name: name.clone(),
+                    root_note: clip.sample_root_note,
+                });
+                cmds.push(ConfigCommand::SetSampleLevel { voice: dst, level: clip.sample_level });
+                cmds.push(ConfigCommand::SetSampleMode { voice: dst, use_sample: clip.use_sample });
+            }
+            _ => cmds.push(ConfigCommand::ClearSample { voice: dst }),
         }
         cmds
     }
