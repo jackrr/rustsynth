@@ -1,4 +1,5 @@
 mod audio;
+mod midi;
 mod preset;
 mod state;
 mod udp;
@@ -16,6 +17,7 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use audio::engine::AudioEngine;
+use midi::server::{MidiStatus, run_midi_server};
 use state::{messages::{ConfigCommand, NoteCommand}, synth_state::SynthState};
 use udp::server::{UdpStatus, run_udp_server};
 use ui::app::App;
@@ -63,6 +65,18 @@ fn main() -> anyhow::Result<()> {
 
     let sample_rate = supported_config.sample_rate().0 as f32;
 
+    // Start Launchpad X controller server; surface connection status via shared status for TUI display
+    let midi_status = Arc::new(Mutex::new(MidiStatus::Starting));
+    let midi_status_for_thread = midi_status.clone();
+    let midi_status_for_app = midi_status.clone();
+
+    let note_tx_for_midi = note_tx.clone();
+    let state_for_midi = synth_state.clone();
+    std::thread::Builder::new()
+        .name("midi-server".into())
+        .spawn(move || run_midi_server(note_tx_for_midi, state_for_midi, sample_rate, midi_status_for_thread))
+        .expect("Failed to spawn MIDI server thread");
+
     let stream_config = cpal::StreamConfig {
         channels: supported_config.channels(),
         sample_rate: supported_config.sample_rate(),
@@ -90,7 +104,7 @@ fn main() -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(state_for_tui, config_tx, note_tx, udp_status_for_app, preset_dir, sample_dir);
+    let mut app = App::new(state_for_tui, config_tx, note_tx, udp_status_for_app, midi_status_for_app, preset_dir, sample_dir);
     let result = app.run(&mut terminal);
 
     disable_raw_mode()?;
