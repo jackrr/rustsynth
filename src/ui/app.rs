@@ -12,6 +12,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Tabs},
 };
 
+use crate::midi::server::MidiStatus;
 use crate::preset;
 use crate::state::messages::{ConfigCommand, NoteCommand};
 use crate::state::synth_state::SynthState;
@@ -45,6 +46,7 @@ pub struct App {
     config_tx: Sender<ConfigCommand>,
     note_tx: Sender<NoteCommand>,
     udp_status: Arc<Mutex<UdpStatus>>,
+    midi_status: Arc<Mutex<MidiStatus>>,
     running: bool,
     status_msg: Option<(String, Instant)>,
     path_prompt: Option<PathPrompt>,
@@ -60,6 +62,7 @@ impl App {
         config_tx: Sender<ConfigCommand>,
         note_tx: Sender<NoteCommand>,
         udp_status: Arc<Mutex<UdpStatus>>,
+        midi_status: Arc<Mutex<MidiStatus>>,
         preset_dir: std::path::PathBuf,
         sample_dir: std::path::PathBuf,
     ) -> Self {
@@ -72,6 +75,7 @@ impl App {
             config_tx,
             note_tx,
             udp_status,
+            midi_status,
             running: true,
             status_msg: None,
             path_prompt: None,
@@ -145,7 +149,7 @@ impl App {
     fn render_header(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(20), Constraint::Min(0), Constraint::Length(22)])
+            .constraints([Constraint::Length(20), Constraint::Min(0), Constraint::Length(34)])
             .split(area);
 
         let title = Paragraph::new("PILOT Rust Synth")
@@ -170,7 +174,7 @@ impl App {
             .divider("|");
         frame.render_widget(tabs, chunks[1]);
 
-        // UDP status widget
+        // UDP + MIDI status widget
         let (udp_text, udp_style) = match &*self.udp_status.lock().unwrap() {
             UdpStatus::Starting => (
                 "UDP: starting…".to_string(),
@@ -185,10 +189,30 @@ impl App {
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
         };
-        let udp = Paragraph::new(udp_text)
-            .style(udp_style)
-            .block(Block::default().borders(Borders::ALL));
-        frame.render_widget(udp, chunks[2]);
+        let (midi_text, midi_style) = match &*self.midi_status.lock().unwrap() {
+            MidiStatus::Starting => (
+                "MIDI: starting…".to_string(),
+                Style::default().fg(Color::Yellow),
+            ),
+            MidiStatus::Connected { port_name } => (
+                format!("MIDI: {}", port_name),
+                Style::default().fg(Color::Green),
+            ),
+            MidiStatus::NotFound => (
+                "MIDI: Launchpad X not found".to_string(),
+                Style::default().fg(Color::Gray),
+            ),
+            MidiStatus::Failed { reason } => (
+                format!("MIDI ERR: {}", reason),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+        };
+        let status_lines = vec![
+            Line::from(Span::styled(udp_text, udp_style)),
+            Line::from(Span::styled(midi_text, midi_style)),
+        ];
+        let status = Paragraph::new(status_lines).block(Block::default().borders(Borders::ALL));
+        frame.render_widget(status, chunks[2]);
     }
 
     fn render_status_bar(&self, frame: &mut Frame, area: ratatui::layout::Rect) {
